@@ -46,8 +46,12 @@ jobs:
           TAURI_ANDROID_PACKAGE_NAME: com.hghubx.app
           TAURI_ANDROID_APP_NAME: hghubx
 
-      - name: Build Android Debug APK
-        run: pnpm tauri android build --debug
+      - name: Build Android Debug APK（加上 --apk）
+        run: pnpm tauri android build --debug --apk
+
+      # 新增诊断：打印目录，看文件真实位置
+      - name: List android output dir
+        run: ls -R src-tauri/gen/android/app/build/outputs
 
       - name: Upload debug apk
         uses: actions/upload-artifact@v4
