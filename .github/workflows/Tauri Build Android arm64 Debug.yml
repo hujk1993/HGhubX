@@ -43,13 +43,13 @@ jobs:
       - name: Build arm64-only debug APK
         run: pnpm tauri android build --apk --debug --target aarch64
 
-      # ========== 新增：自动搜索所有so，剥离符号，不写死路径 ==========
-      - name: Strip so files to reduce size
+      # 体积优化，失败不中断任务
+      - name: Strip .so 精简体积
         run: |
-          find src-tauri/gen/android -name "*.so" -exec rust-llvm-strip {} \;
-        continue-on-error: true # 就算strip失败，也不打断整个打包上传
+          find src-tauri/gen/android -type f -name "*.so" -exec rust-llvm-strip {} \;
+        continue-on-error: true
 
-      - name: Find apk and upload
+      - name: 上传APK
         uses: actions/upload-artifact@v4
         with:
           name: android-arm64-debug-apk
