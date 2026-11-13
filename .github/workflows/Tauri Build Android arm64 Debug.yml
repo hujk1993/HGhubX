@@ -1,0 +1,58 @@
+name: Tauri Build Android arm64 Debug
+on:
+  workflow_dispatch:
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        run: npm install -g pnpm@9
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Build arm64-only debug APK
+        run: pnpm tauri android build --apk --debug --target aarch64-linux-android
+
+      - name: Install strip tools & strip so
+        run: |
+          apt update
+          apt install -y binutils-aarch64-linux-gnu
+          APK_DIR=src-tauri/gen/android/app/build/outputs/apk/aarch64/debug
+          find $APK_DIR -name "*.so" -exec aarch64-linux-gnu-strip {} \;
+          cd $APK_DIR
+          zip -q app-aarch64-debug.apk lib/*/*.so
+
+      - name: List output
+        run: ls -lh src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-debug-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
