@@ -36,6 +36,10 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
+      # 新增：初始化安卓工程（缺失的这一步）
+      - name: Init Android project
+        run: pnpm tauri android init
+
       - name: Build arm64-only debug APK
         run: pnpm tauri android build --apk --debug --target aarch64
 
