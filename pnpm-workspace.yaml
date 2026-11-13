@@ -13,3 +13,6 @@ onlyBuiltDependencies:
   - esbuild
 allowBuilds:
   esbuild: true
+packages:
+  - '.'
+  - 'src-tauri'
