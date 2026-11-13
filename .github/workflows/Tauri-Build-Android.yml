@@ -29,6 +29,12 @@ jobs:
         env:
           npm_config_registry: https://registry.npmmirror.com
 
+      - name: Init Android project
+        run: pnpm tauri android init --skip-targets
+        env:
+          TAURI_ANDROID_PACKAGE_NAME: com.hghubx.app
+          TAURI_ANDROID_APP_NAME: hghubx
+
       - name: Build Android Debug APK
         run: pnpm tauri android build --debug
 
