@@ -31,8 +31,6 @@ jobs:
 
       - name: Run Tauri build
         run: pnpm tauri build -- --bundles nsis
-        env:
-          TAURI_BUNDLER_TOOLS_GITHUB_MIRROR: https://mirror.ghproxy.com
 
       - name: Upload exe installer
         uses: actions/upload-artifact@v4
