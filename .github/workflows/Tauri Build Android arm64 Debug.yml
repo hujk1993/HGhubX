@@ -26,6 +26,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+          components: llvm-tools-preview # 开启llvm-strip
 
       - name: Cache Rust
         uses: swatinem/rust-cache@v2
@@ -36,19 +37,17 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
-      # 新增：初始化安卓工程（缺失的这一步）
       - name: Init Android project
         run: pnpm tauri android init
 
       - name: Build arm64-only debug APK
         run: pnpm tauri android build --apk --debug --target aarch64
 
-      - name: Install strip tools & strip so
+      # ✅ 使用rust自带llvm-strip，不需要apt、不需要sudo
+      - name: Strip debug symbols from .so
         run: |
-          apt update
-          apt install -y binutils-aarch64-linux-gnu
           APK_DIR=src-tauri/gen/android/app/build/outputs/apk/aarch64/debug
-          find $APK_DIR -name "*.so" -exec aarch64-linux-gnu-strip {} \;
+          find $APK_DIR -name "*.so" -exec rust-llvm-strip {} \;
 
       - name: Show real apk size
         run: ls -lh src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
