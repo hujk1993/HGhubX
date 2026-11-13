@@ -13,15 +13,6 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          # 删掉 cache: gradle，避免提前扫描失败
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 11.0
-          platform-version: 34
-          build-tools-version: 34.0.0
-          ndk-version: 27.0.12077973
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -43,6 +34,11 @@ jobs:
         run: pnpm install
         env:
           npm_config_registry: https://registry.npmmirror.com
+
+      - name: Install Android deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
 
       - name: Init Android project
         run: pnpm tauri android init --skip-targets-install
