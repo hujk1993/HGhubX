@@ -43,14 +43,21 @@ jobs:
       - name: Build arm64-only debug APK
         run: pnpm tauri android build --apk --debug --target aarch64
 
-      # 体积优化，失败不中断任务
       - name: Strip .so 精简体积
         run: |
           find src-tauri/gen/android -type f -name "*.so" -exec rust-llvm-strip {} \;
         continue-on-error: true
 
+      # 先找到apk，存入环境变量
+      - name: Find APK path
+        run: |
+          APK=$(find src-tauri/gen/android -name "*debug*.apk" | head -n1)
+          echo "APK_PATH=$APK" >> $GITHUB_ENV
+          echo "Found apk: $APK"
+
+      # 用环境变量上传，不再内嵌shell
       - name: 上传APK
         uses: actions/upload-artifact@v4
         with:
           name: android-arm64-debug-apk
-          path: $(find src-tauri/gen/android -name "*debug*.apk" | head -n1)
+          path: ${{ env.APK_PATH }}
