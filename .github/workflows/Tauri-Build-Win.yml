@@ -12,13 +12,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'pnpm'
+          # 重点：删掉 cache: 'pnpm'，避免提前去找pnpm报错
 
-      # 关键：自动安装pnpm，解决 Unable to locate executable file: pnpm
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      - name: Corepack enable 启用pnpm（Windows最稳方案）
+        run: |
+          npm install -g corepack
+          corepack enable
+          corepack prepare pnpm@9 --activate
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
