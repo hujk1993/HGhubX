@@ -26,7 +26,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-          components: llvm-tools-preview # 开启llvm-strip
+          components: llvm-tools-preview
 
       - name: Cache Rust
         uses: swatinem/rust-cache@v2
@@ -43,17 +43,14 @@ jobs:
       - name: Build arm64-only debug APK
         run: pnpm tauri android build --apk --debug --target aarch64
 
-      # ✅ 使用rust自带llvm-strip，不需要apt、不需要sudo
-      - name: Strip debug symbols from .so
+      # ========== 新增：自动搜索所有so，剥离符号，不写死路径 ==========
+      - name: Strip so files to reduce size
         run: |
-          APK_DIR=src-tauri/gen/android/app/build/outputs/apk/aarch64/debug
-          find $APK_DIR -name "*.so" -exec rust-llvm-strip {} \;
+          find src-tauri/gen/android -name "*.so" -exec rust-llvm-strip {} \;
+        continue-on-error: true # 就算strip失败，也不打断整个打包上传
 
-      - name: Show real apk size
-        run: ls -lh src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
-
-      - name: Upload APK（只传单个文件！）
+      - name: Find apk and upload
         uses: actions/upload-artifact@v4
         with:
           name: android-arm64-debug-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
+          path: $(find src-tauri/gen/android -name "*debug*.apk" | head -n1)
