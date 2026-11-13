@@ -45,13 +45,11 @@ jobs:
           apt install -y binutils-aarch64-linux-gnu
           APK_DIR=src-tauri/gen/android/app/build/outputs/apk/aarch64/debug
           find $APK_DIR -name "*.so" -exec aarch64-linux-gnu-strip {} \;
-          cd $APK_DIR
-          zip -q app-aarch64-debug.apk lib/*/*.so
 
-      - name: List output
-        run: ls -lh src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/
+      - name: Show real apk size
+        run: ls -lh src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
 
-      - name: Upload APK
+      - name: Upload APK（只传单个文件！）
         uses: actions/upload-artifact@v4
         with:
           name: android-arm64-debug-apk
