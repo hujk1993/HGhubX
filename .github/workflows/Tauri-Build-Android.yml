@@ -1,0 +1,39 @@
+name: Tauri Build Android APK
+on:
+  workflow_dispatch:
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        run: npm install -g pnpm@9
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: pnpm install
+        env:
+          npm_config_registry: https://registry.npmmirror.com
+
+      - name: Build Android Debug APK
+        run: pnpm tauri android build --debug
+
+      - name: Upload debug apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: src-tauri/target/android/debug/apk/*.apk
