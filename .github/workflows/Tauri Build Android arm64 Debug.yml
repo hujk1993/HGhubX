@@ -37,7 +37,7 @@ jobs:
         run: pnpm build
 
       - name: Build arm64-only debug APK
-        run: pnpm tauri android build --apk --debug --target aarch64-linux-android
+        run: pnpm tauri android build --apk --debug --target aarch64
 
       - name: Install strip tools & strip so
         run: |
