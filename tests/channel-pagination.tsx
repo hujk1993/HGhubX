@@ -37,15 +37,17 @@ const fixture = {
   pending,
   page1,
   page2,
-  resolveNext() {
-    const request = pending.shift();
-    if (!request) throw new Error("no pending api_category request");
-    const page = Number(request.args.page);
-    const sort = request.args.sort as string | undefined;
-    const source = page === 1 ? page1 : page2;
+  resolveNext(desiredSort?: string, desiredPage?: number) {
+    const index = pending.findIndex(({ args }) =>
+      (desiredSort === undefined || args.sort === desiredSort) && (desiredPage === undefined || args.page === desiredPage));
+    const [request] = index < 0 ? [] : pending.splice(index, 1);
+    if (!request) throw new Error(`no pending api_category request for sort=${desiredSort}, page=${desiredPage}`);
+    const responsePage = Number(request.args.page);
+    const responseSort = request.args.sort as string | undefined;
+    const source = responsePage === 1 ? page1 : page2;
     request.resolve({
-      items: sortList(source, sort),
-      pagination: { page, pages: 2, size: 20, total: 40 },
+      items: sortList(source, responseSort),
+      pagination: { page: responsePage, pages: 2, size: 20, total: 40 },
     });
   },
 };

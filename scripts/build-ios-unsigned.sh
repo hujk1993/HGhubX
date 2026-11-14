@@ -12,6 +12,11 @@ ADDR_FILE="$(node -p "require('os').tmpdir() + '/' + require('./src-tauri/tauri.
 mkdir -p artifacts
 rm -f "$ADDR_FILE"
 
+# init writes Tauri template icons; generate square opaque artwork and replace it
+# before either build starts. The later beforeBuildCommand repeats this idempotently.
+node scripts/generate-ios-icons.mjs
+node scripts/sync-ios-icons.mjs --required
+
 # Tauri 没有 ios --no-sign。让它的 release options server 一直活着，
 # 否则 Xcode 的 Build Rust Code 阶段连不上它会直接 panic。
 pnpm tauri ios build --open --ci --features custom-protocol >"$LOG" 2>&1 &

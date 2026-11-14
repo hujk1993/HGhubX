@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { tracePlayback } from "./playbackDiagnostics";
 import type {
-  CommentPage, Detail, HotWord, Paged, PlayInfo, Post, PostCategory, RankItem, TagGroup, TopicCard, TopicDetail, User, UserProfile, VideoCard,
+  CommentPage, Detail, HotSearchVideo, Paged, PlayInfo, Post, PostCategory, RankItem, TagGroup, TopicCard, TopicDetail, User, UserProfile, VideoCard,
 } from "./types";
 
 /* ── 运行环境 ───────────────────────────────────────────── */
@@ -153,7 +153,7 @@ export const api = {
     call<{ items: Post[]; pagination: Paged<Post>["pagination"]; keyword: string }>(
       "api_search", { q, page, size, kind: "post" },
     ),
-  searchHot: () => call<{ items: HotWord[] }>("api_search_hot"),
+  searchHot: () => call<{ items: HotSearchVideo[] }>("api_search_hot"),
   posts: (page = 1, size = 20, sort?: string) =>
     call<Paged<Post>>("api_posts", { page, size, sort: sort ?? null }),
   post: (id: number) => call<Post & { content?: string; video_url?: string }>("api_post", { id }),
@@ -188,6 +188,9 @@ export const api = {
   /* 线路（数据源）：固定线路写死在 Rust 侧，镜像线路从地址发布页拉、推荐镜像从发布入口页拉 */
   lineState: () => call<LineState>("line_state"),
   lineSet: (url: string) => call<string>("line_set", { url }),
+  lineCustomSet: (url: string) => call<LineApply>("line_custom_set", { url }),
+  lineReset: () => call<LineApply>("line_reset"),
+  lineCancel: () => call<void>("line_cancel"),
   lineMirrors: () => call<LineMirrors>("line_mirrors"),
   lineProbe: (urls: string[]) => call<LineProbe[]>("line_probe", { urls }),
   lineAuto: () => call<LineAuto>("line_auto"),
@@ -195,6 +198,11 @@ export const api = {
   lineTryMain: () => call<LineTryMain>("line_try_main"),
   /* 线路体检：探一次 /api/videos，和自动选线同一判据 */
   lineHealth: () => call<LineHealth>("line_health"),
+
+  /* 应用内代理：只影响本应用的上游网络请求。 */
+  proxyState: () => call<ProxyState>("proxy_state"),
+  proxySet: (mode: ProxyMode, url: string) => call<ProxyState>("proxy_set", { mode, url }),
+  proxyTest: (mode: ProxyMode, url: string) => call<ProxyProbe>("proxy_test", { mode, url }),
 
   /* 更新检查：对比 GitHub Release 的 tag */
   checkUpdate: () => call<UpdateInfo>("check_update"),
@@ -219,12 +227,25 @@ export type UpdateInfo = {
 /* ── 线路（数据源） ─────────────────────────────────────── */
 
 export type LineItem = { name?: string; url: string; host?: string };
-export type LineState = { base: string; default: string; fixed: LineItem[] };
+export type LineState = { base: string; default: string; fixed: LineItem[]; custom?: boolean };
+export type LineApply = { base: string; custom: boolean };
 export type LineMirrors = { source: string; script?: string; items: LineItem[]; recommended_source?: string; recommended: LineItem[] };
 export type LineProbe = { url: string; ok: boolean; status?: number; ms: number; error?: string };
 export type LineHealth = { base: string; ok: boolean; ms: number; status: number | null };
 
-/** 自动选线：只比 `.com` 与 `.ai` 两条，取通的那条、快的那条。 */
+export type ProxyMode = "system" | "custom" | "off";
+export type ProxyState = {
+  mode: ProxyMode;
+  /** 保存过的自定义地址，仅用于设置表单回填，不写入日志。 */
+  url: string;
+  /** 不含认证信息的实际出口。 */
+  effective?: string | null;
+  system_proxy?: boolean;
+  env_proxy?: boolean;
+};
+export type ProxyProbe = { ok: boolean; status?: number | null; ms: number; error?: string; via?: string };
+
+/** 自动选线：主站可用时优先，否则检测可信发布页中的镜像。 */
 export type LineAutoCandidate = {
   tier: "main" | "cn" | "mirror";
   url: string;
@@ -234,12 +255,13 @@ export type LineAutoCandidate = {
   status: number | null;
 };
 export type LineAuto = {
+  cancelled?: boolean;
   previous: string;
   base: string;
   switched: boolean;
   pick: {
     base: string;
-    tier: "main" | "cn" | "none";
+    tier: "main" | "cn" | "mirror" | "none";
     ms: number;
     reason: string;
     candidates: LineAutoCandidate[];
@@ -248,6 +270,7 @@ export type LineAuto = {
 
 /** 回切主站的探测结果：`probe.ok` 为主站到底通不通 */
 export type LineTryMain = {
+  cancelled?: boolean;
   previous: string;
   base: string;
   switched: boolean;

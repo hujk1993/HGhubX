@@ -11,7 +11,7 @@ import Hls from "hls.js";
 import { installLayoutDiagnostics } from "./layoutDiagnostics";
 installPlaybackPageEvents();
 void initPlaybackLog();
-/* 自动选线：启动时比一次 com / ai，之后跟着网络变化复查 */
+/* 自动选线：主站不可用时探测已发布镜像，之后跟随网络变化复查 */
 initAutoLine();
 /* 环境指纹：写进始终记录的 debug.log。用户复制诊断时不用再自报版本、平台、内核版本 */
 logLine(

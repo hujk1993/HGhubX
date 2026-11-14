@@ -6,7 +6,7 @@
 
 **第三方客户端 · Rust + Tauri 2**
 
-Windows / macOS / Linux / Android / iOS · Fluent 设计 · 沉浸式竖屏播放
+Windows / macOS / Linux / Android / iOS · iOS 圆角与玻璃材质 · 沉浸式竖屏播放
 
 </div>
 
@@ -44,6 +44,12 @@ Windows / macOS / Linux / Android / iOS · Fluent 设计 · 沉浸式竖屏播�
 - 本项目仅在上述官方渠道发布；任何第三方修改版（尤其是加卡密、VIP 变现的版本）均与作者无关，请自行甄别。
 - 使用者应自行遵守所在地法律法规；因使用本项目产生的任何后果由使用者自行承担。
 - 若相关权利方认为本项目存在侵权，请通过 Issue 联系，我们会及时处理。
+
+## 升级兼容
+
+- 本地收藏、观看记录、偏好、切集迁移标记和主题使用 `hghubx_*` 存储键。首次启动时，当前 WebView 存储中的旧 `hghub_*` 数据会迁移到新键；已有新数据优先，确认写入成功后才清理对应旧键。写入失败时保留并读取旧数据，下次启动重试。此迁移针对同一存储空间，不会跨应用标识或跨浏览器配置目录读取其他安装的数据。
+- 环境变量统一使用 `HGHUBX_PROXY`、`HGHUBX_STRICT`、`HGHUBX_TEST_COVER_URL`、`HGHUBX_TEST_MEDIA_URL` 和 `HGHUBX_TEST_MEDIA_OUTPUT`。旧 `HGHUB_*` 名称继续兼容；新变量未设置时才回退旧变量，显式设置的新值（包括空值）优先。安全模式的命令行参数仍优先于环境变量。
+- 网络诊断中的显式代理字段统一为 `HGHUBX_PROXY`，展示兼容读取后的有效值并保持脱敏。
 
 ## License
 

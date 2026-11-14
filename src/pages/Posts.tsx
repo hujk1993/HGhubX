@@ -1,3 +1,6 @@
+import { MediaCard } from "../components/cards";
+import { Button, Surface } from "../components/ios/controls";
+import { Loader } from "../components/ios/effects";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, cover, fmt, isMobile } from "../api";
 import type { Post } from "../types";
@@ -52,38 +55,27 @@ export function PostsPage({ onBack, wide }: { onBack: () => void; wide: boolean 
   }, [page, pages]);
 
   return (
-    <div className="absolute inset-0 bg-bg flex flex-col">
+    <div className="ios-page absolute inset-0 bg-bg flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-2 bg-s1" style={{ paddingTop: "var(--sat, 0px)" }}>
-        <button onClick={onBack} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><IBack size={19} /></button>
-        <span className="text-[14px] font-bold text-on">吃瓜</span>
-        <span className="text-[10.5px] text-mut ml-1">圈内爆料 · 每日更新</span>
-        <button onClick={() => setSearching(true)} aria-label="搜索吃瓜" className="ml-auto w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><ISearch size={19} /></button>
+        <Button aria-label="返回" onClick={onBack} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><IBack size={19} /></Button>
+        <span className="text-[15px] font-bold text-on">吃瓜</span>
+        <span className="text-[12px] text-mut ml-1">圈内爆料 · 每日更新</span>
+        <Button onClick={() => setSearching(true)} aria-label="搜索吃瓜" className="ml-auto w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><ISearch size={19} /></Button>
       </div>
       <div className="flex-1 scroll-y px-3 pt-3 pb-8">
         {items.length ? (
-          <div className={`${wide ? "columns-3 xl:columns-4" : "columns-2"} gap-2`}>
+          <div className={`ios-media-grid ${wide ? "is-wide" : ""}`}>
             {items.map((p) => (
-              <button key={p.id} onClick={() => push({ kind: "post", id: p.id })}
-                className="w-full break-inside-avoid mb-2 relative rounded-(--r-sm) overflow-hidden bg-s1 elev-1 pressable block"
-                style={{ paddingTop: "128%" }}>
-                <Img src={p.cover} />
-                <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
-                <div className="absolute inset-x-0 bottom-0 p-2">
-                  <div className="text-[11.5px] font-medium text-white clamp-2 leading-snug tsh">{p.title}</div>
-                  <div className="flex items-center gap-1 mt-1 text-[9.5px] text-white/70">
-                    <IFireF size={10} className="text-white/70" />{fmt(p.hot)}
-                  </div>
-                </div>
-              </button>
+              <MediaCard key={p.id} title={p.title} cover={p.cover} subtitle={`${fmt(p.hot)} 次浏览`} onOpen={() => push({ kind: "post", id: p.id })} />
             ))}
           </div>
         ) : loading ? (
-          <div className="flex justify-center py-12"><div className="w-8 h-8 spinner" /></div>
+          <div className="flex justify-center py-12"><Loader className="w-8 h-8 spinner" /></div>
         ) : (
           <Empty icon={<IFireF size={26} />} title="暂无吃瓜内容" sub="稍后再来看看" />
         )}
         <div ref={sentinel} className="h-10" />
-        {loading && <div className="flex justify-center py-2"><div className="w-6 h-6 spinner" /></div>}
+        {loading && <div className="flex justify-center py-2"><Loader className="w-6 h-6 spinner" /></div>}
       </div>
       {searching && <InplaceSearch kind="post" postLabel="吃瓜帖子" wide={wide} onClose={() => setSearching(false)} onOpenPost={(p) => push({ kind: "post", id: p.id })} />}
     </div>
@@ -140,17 +132,17 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
   }, [id]);
 
   return (
-    <div className="absolute inset-0 bg-bg flex flex-col">
+    <div className="ios-page absolute inset-0 bg-bg flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-2 bg-s1" style={{ paddingTop: isMobile ? "var(--sat, 0px)" : 0, height: isMobile ? "calc(44px + var(--sat, 0px))" : 44 }}>
-        <button onClick={onBack} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><IBack size={19} /></button>
-        <span className="text-[13.5px] font-semibold text-on">吃瓜详情</span>
+        <Button aria-label="返回" onClick={onBack} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><IBack size={19} /></Button>
+        <span className="text-[14px] font-semibold text-on">吃瓜详情</span>
       </div>
 
       <div className="flex-1 scroll-y pb-8">
         {err ? (
           <Empty icon={<IFireF size={26} />} title="加载失败" sub={err} />
         ) : !post ? (
-          <div className="flex justify-center py-12"><div className="w-8 h-8 spinner" /></div>
+          <div className="flex justify-center py-12"><Loader className="w-8 h-8 spinner" /></div>
         ) : (
           <>
             <div className="relative w-full bg-black" style={{ height: "min(40vh, 360px)" }}>
@@ -162,7 +154,7 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
                     if (seg < segs.length - 1) setSeg(seg + 1); else setPlay(false);
                   }} />
               ) : (
-                <button onClick={() => { if (src) setPlay(true); else if (!resolving) toast("该帖子没有视频", "info"); }} className="absolute inset-0">
+                <Button onClick={() => { if (src) setPlay(true); else if (!resolving) toast("该帖子没有视频", "info"); }} className="absolute inset-0">
                   <Img src={post.cover} eager />
                   {src && (
                     <span className="absolute inset-0 flex items-center justify-center">
@@ -171,37 +163,37 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
                       </span>
                     </span>
                   )}
-                </button>
+                </Button>
               )}
               {segs.length > 1 && (
                 <div className="absolute top-2 right-2 z-30 flex items-center gap-1 max-w-[70%] overflow-x-auto no-bar">
                   {segs.map((_, i) => (
-                    <button key={i} onClick={() => { setSeg(i); setPlay(true); }}
-                      className="shrink-0 h-6 px-2 rounded-full text-[10.5px] font-semibold pressable"
+                    <Button key={i} onClick={() => { setSeg(i); setPlay(true); }}
+                      className="shrink-0 h-6 px-2 rounded-full text-[12px] font-semibold pressable"
                       style={i === seg
                         ? { background: "var(--p-primary)", color: "var(--p-on-primary)" }
                         : { background: "rgba(0,0,0,.55)", color: "rgba(255,255,255,.85)" }}>
                       {i + 1}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               )}
             </div>
             <div className="px-4 pt-3.5">
               <h1 className="text-[17px] font-bold text-on leading-snug">{post.title}</h1>
-              <div className="flex items-center gap-2 mt-2 text-[10.5px] text-mut">
+              <div className="flex items-center gap-2 mt-2 text-[12px] text-mut">
                 <span>{post.publish_time || post.created_at}</span>
                 <span className="flex items-center gap-1"><IFireF size={10} />{fmt(post.hot)}</span>
               </div>
               <div className="flex flex-wrap gap-1.5 mt-2.5">
                 {(post.tags || []).filter((t) => !t.includes(HIDDEN_POST_TAG)).slice(0, 8).map((t) => (
-                  <span key={t} className="px-2 py-0.5 rounded-(--r-ctl) bg-s3 text-[10.5px] text-on/75">#{t}</span>
+                  <span key={t} className="px-2 py-0.5 rounded-(--r-ctl) bg-s3 text-[12px] text-on/75">#{t}</span>
                 ))}
               </div>
               {post.content && (
                 (isHtml(post.content) || (!strictSecurity && /<[a-z][\s\S]*>/i.test(post.content)))
                   ? <div className="article-body mt-3.5" onClick={(e) => handleArticleClick(e, openSafeLink)} dangerouslySetInnerHTML={{ __html: safeHtml }} />
-                  : <div className="mt-3.5 rounded-(--r-md) bg-s2 p-3.5 text-[12.5px] leading-relaxed text-on/80 whitespace-pre-wrap">{post.content}</div>
+                  : <Surface className="mt-3.5 rounded-(--r-md) bg-s2 p-3.5 text-[14px] leading-relaxed text-on/80 whitespace-pre-wrap">{post.content}</Surface>
               )}
             </div>
           </>

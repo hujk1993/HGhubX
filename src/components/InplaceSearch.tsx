@@ -1,7 +1,9 @@
+import { Button, Form, Input } from "./ios/controls";
+import { Loader } from "./ios/effects";
 import { useRef, useState } from "react";
 import { api, fmt } from "../api";
 import type { Post, VideoCard } from "../types";
-import { Masonry } from "./cards";
+import { MediaCard, Masonry } from "./cards";
 import { Empty, Img } from "./ui";
 import { IBack, IClose, IFireF, ISearch } from "../icons";
 
@@ -85,50 +87,42 @@ export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVide
   const videoLabel = scope === "original" ? "原创" : "短剧";
 
   return (
-    <div className="absolute inset-0 z-20 bg-bg flex flex-col">
+    <div className="ios-page absolute inset-0 z-20 bg-bg flex flex-col">
       <div className="shrink-0 px-4 pb-3 flex items-center gap-2.5 bg-s1" style={{ paddingTop: "calc(var(--sat, 0px) + 12px)" }}>
-        <button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable" aria-label="退出搜索"><IBack size={19} /></button>
-        <form className="flex-1 flex items-center gap-2 h-11 rounded-(--r-ctl) bg-s3 px-3.5 focus-within:bg-s4 transition-colors"
+        <Button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable" aria-label="退出搜索"><IBack size={19} /></Button>
+        <Form className="flex-1 flex items-center gap-2 h-11 rounded-(--r-ctl) bg-s3 px-3.5 focus-within:bg-s4 transition-colors"
           onSubmit={(e) => { e.preventDefault(); submit(q); }}>
           <ISearch size={17} className="text-mut shrink-0" />
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={kind === "post" ? `搜索${postLabel}…` : `搜索${videoLabel}…`}
-            className="flex-1 min-w-0 bg-transparent text-[13.5px] text-on placeholder-dim outline-none" />
-          {q && <button type="button" onClick={() => { seqRef.current++; busy.current = false; setLoading(false); setErr(null); setQ(""); setSubmitted(""); setItems([]); setPosts([]); }} className="w-5 h-5 rounded-full bg-s4 flex items-center justify-center text-mut pressable"><IClose size={11} /></button>}
-        </form>
+          <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={kind === "post" ? `搜索${postLabel}…` : `搜索${videoLabel}…`}
+            className="flex-1 min-w-0 bg-transparent text-[14px] text-on placeholder-dim outline-none" />
+          {q && <Button aria-label="关闭" type="button" onClick={() => { seqRef.current++; busy.current = false; setLoading(false); setErr(null); setQ(""); setSubmitted(""); setItems([]); setPosts([]); }} className="w-5 h-5 rounded-full bg-s4 flex items-center justify-center text-mut pressable"><IClose size={11} /></Button>}
+        </Form>
       </div>
 
       <div className="flex-1 scroll-y px-4 pt-3 pb-8">
         {!submitted ? (
-          <div className="flex justify-center py-20"><span className="text-[12px] text-mut">{kind === "post" ? `输入关键词，在本栏目内搜索${postLabel}` : `输入关键词，在本栏目内搜索${videoLabel}`}</span></div>
+          <div className="flex justify-center py-20"><span className="text-[13px] text-mut">{kind === "post" ? `输入关键词，在本栏目内搜索${postLabel}` : `输入关键词，在本栏目内搜索${videoLabel}`}</span></div>
         ) : loading && !count ? (
-          <div className="flex justify-center py-12"><div className="w-8 h-8 spinner" /></div>
+          <div className="flex justify-center py-12"><Loader className="w-8 h-8 spinner" /></div>
         ) : count ? (
           kind === "post" ? (
             <>
-              <div className="text-[11.5px] text-mut mb-2.5">「{submitted}」共 <span className="text-primary font-bold">{count}</span> 条{postLabel}</div>
-              <div className={`${wide ? "columns-3 xl:columns-4" : "columns-2"} gap-2`}>
+              <div className="text-[12px] text-mut mb-2.5">「{submitted}」共 <span className="text-primary font-bold">{count}</span> 条{postLabel}</div>
+              <div className={`ios-media-grid ${wide ? "is-wide" : ""}`}>
                 {posts.map((post) => (
-                  <button key={post.id} onClick={() => onOpenPost?.(post)}
-                    className="w-full break-inside-avoid mb-2 relative rounded-(--r-sm) overflow-hidden bg-s1 elev-1 pressable block" style={{ paddingTop: "128%" }}>
-                    <Img src={post.cover} />
-                    <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
-                    <div className="absolute inset-x-0 bottom-0 p-2">
-                      <div className="text-[11.5px] font-medium text-white clamp-2 leading-snug tsh">{post.title}</div>
-                      <div className="flex items-center gap-1 mt-1 text-[9.5px] text-white/70"><IFireF size={10} className="text-white/70" />{fmt(post.hot)}</div>
-                    </div>
-                  </button>
+                  <MediaCard key={post.id} title={post.title} cover={post.cover} subtitle={`${fmt(post.hot)} 次浏览`} onOpen={() => onOpenPost?.(post)} />
                 ))}
               </div>
               <div className="flex justify-center py-4">
-                {loading ? <div className="w-6 h-6 spinner" /> : page < pages ? <button onClick={() => run(submitted, page + 1)} className="px-5 h-9 rounded-(--r-ctl) bg-s3 text-[12px] text-on/85 pressable">加载更多</button> : <span className="text-[10.5px] text-dim">— 已经到底啦 —</span>}
+                {loading ? <Loader className="w-6 h-6 spinner" /> : page < pages ? <Button onClick={() => run(submitted, page + 1)} className="px-5 h-9 rounded-(--r-ctl) bg-s3 text-[13px] text-on/85 pressable">加载更多</Button> : <span className="text-[12px] text-dim">— 已经到底啦 —</span>}
               </div>
             </>
           ) : (
             <>
-              <div className="text-[11.5px] text-mut mb-2.5">「{submitted}」共 <span className="text-primary font-bold">{count}</span> 条{videoLabel}</div>
+              <div className="text-[12px] text-mut mb-2.5">「{submitted}」共 <span className="text-primary font-bold">{count}</span> 条{videoLabel}</div>
               <Masonry videos={items} wide={wide} onOpen={(v) => onOpenVideo?.(v, items)} />
               <div className="flex justify-center py-4">
-                {loading ? <div className="w-6 h-6 spinner" /> : page < pages ? <button onClick={() => run(submitted, page + 1)} className="px-5 h-9 rounded-(--r-ctl) bg-s3 text-[12px] text-on/85 pressable">加载更多</button> : <span className="text-[10.5px] text-dim">— 已经到底啦 —</span>}
+                {loading ? <Loader className="w-6 h-6 spinner" /> : page < pages ? <Button onClick={() => run(submitted, page + 1)} className="px-5 h-9 rounded-(--r-ctl) bg-s3 text-[13px] text-on/85 pressable">加载更多</Button> : <span className="text-[12px] text-dim">— 已经到底啦 —</span>}
               </div>
             </>
           )

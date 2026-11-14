@@ -1,3 +1,5 @@
+import { LiquidIndicator } from "./components/ios/effects";
+import { Button } from "./components/ios/controls";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore, type Page, type Tab } from "./store";
 import { isMobile, selfTest } from "./api";
@@ -19,78 +21,30 @@ import ResizeHandles from "./components/ResizeHandles";
 import { tracePlayback } from "./playbackDiagnostics";
 import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF, Logo } from "./icons";
 
-/* ============ 底部标签栏（移动端）—— iOS 26 液态玻璃悬浮胶囊 ============ */
-/* 设计对齐 liuran001/WeChat-LiquidGlass（iOS 26 风格）：
-   - 不贴边的悬浮胶囊玻璃条，内容透出真实折射感（backdrop blur + 高光内描边）
-   - 选中项是一枚「液滴」玻璃胶囊，用弹簧物理滑动跟随（无 JS 逐帧驱动，
-     用 CSS transition + cubic-bezier 近似 WeChat-LiquidGlass 的 DampedDragAnimation）
-   - 按压时液滴放大（对齐其 press scale 1.1x），图标带充色 */
 function TabBar() {
-  const { tab, setTab, theme, platform } = useStore();
-  const android = platform === "android";
-  const items: { k: Tab; label: string; On: (p: { size?: number; className?: string; style?: React.CSSProperties; strokeWidth?: number }) => React.JSX.Element; Off: (p: { size?: number; className?: string; style?: React.CSSProperties; strokeWidth?: number }) => React.JSX.Element }[] = [
-    { k: "home", label: "首页", On: IHomeF, Off: IHome },
-    { k: "search", label: "搜索", On: ISearch, Off: ISearch },
-    { k: "category", label: "分类", On: IGridF, Off: IGrid },
-    { k: "profile", label: "我的", On: IUserF, Off: IUser },
-  ];
-  const idx = items.findIndex((i) => i.k === tab);
-  const overVideo = tab === "home";
-  const light = !overVideo && theme === "light";
-  /* 液滴中心对齐每个等分槽位的中心，定位不受固定胶囊宽度影响。 */
-  const dropLeft = `${12.5 + idx * 25}%`;
-  return (
-    <nav className="hg-tabbar absolute inset-x-0 bottom-0 z-30 flex justify-center"
-      style={{ paddingBottom: android ? "var(--sab, 0px)" : "calc(var(--sab, 0px) * 0.55)" }} aria-label="主导航">
-      <div className="hg-glass relative" style={{
-        width: "min(92vw, 420px)",
-        height: 56,
-        borderRadius: 28,
-        background: light ? "rgba(250, 250, 250, .62)" : "rgba(22, 22, 24, .55)",
-        boxShadow: light
-          ? "0 8px 32px rgba(0,0,0,.12), 0 1px 0 rgba(255,255,255,.85) inset, 0 0 0 .5px rgba(0,0,0,.06)"
-          : "0 8px 32px rgba(0,0,0,.38), 0 1px 0 rgba(255,255,255,.16) inset, 0 0 0 .5px rgba(255,255,255,.10)",
-        backdropFilter: "blur(24px) saturate(180%)",
-        WebkitBackdropFilter: "blur(24px) saturate(180%)",
-      }}>
-        {/* 液滴：跟随选中项的玻璃胶囊 */}
-        <div className="hg-drop absolute top-[4px] bottom-[4px] w-[56px]" style={{
-          left: dropLeft,
-          transform: "translateX(-50%)",
-          borderRadius: 24,
-          transition: "left 480ms cubic-bezier(.32,1.35,.45,1)",
-          background: light ? "rgba(255,255,255,.92)" : "rgba(255,255,255,.14)",
-          boxShadow: light
-            ? "0 2px 10px rgba(0,0,0,.10), 0 0 0 .5px rgba(0,0,0,.05)"
-            : "0 1px 8px rgba(255,255,255,.08) inset, 0 0 0 .5px rgba(255,255,255,.22)",
-          backdropFilter: "blur(10px) brightness(1.12)",
-          WebkitBackdropFilter: "blur(10px) brightness(1.12)",
-        }} />
-        <div className="relative h-full grid grid-cols-4">
-          {items.map(({ k, label, On, Off }) => {
-            const on = tab === k;
-            const Icon = on ? On : Off;
-            return (
-              <button key={k} onClick={() => setTab(k)}
-                className="relative flex flex-col items-center justify-center gap-[2px] pressable"
-                aria-current={on ? "page" : undefined}>
-                <Icon size={21} style={{
-                  color: on ? "var(--p-primary)" : (light ? "rgba(0,0,0,.42)" : "rgba(255,255,255,.62)"),
-                  transition: "color 200ms, transform 320ms cubic-bezier(.32,1.35,.45,1)",
-                  transform: on ? "scale(1.08) translateY(-1px)" : "scale(1)",
-                }} />
-                <span className="text-[9.5px] leading-none" style={{
-                  fontWeight: on ? 700 : 500,
-                  color: on ? "var(--p-primary)" : (light ? "rgba(0,0,0,.42)" : "rgba(255,255,255,.62)"),
-                  transition: "color 200ms",
-                }}>{label}</span>
-              </button>
-            );
-          })}
-        </div>
+  const { tab, setTab, platform } = useStore();
+  const items = [
+    { key: "home", label: "首页", Icon: IHome, Active: IHomeF },
+    { key: "search", label: "搜索", Icon: ISearch, Active: ISearch },
+    { key: "category", label: "分类", Icon: IGrid, Active: IGridF },
+    { key: "profile", label: "我的", Icon: IUser, Active: IUserF },
+  ] as const;
+  const index = items.findIndex(item => item.key === tab);
+  return <nav className="hg-tabbar ios-mobile-nav" aria-label="主导航" data-over-video={tab === "home"}
+    style={{ paddingBottom: platform === "android" ? "var(--sab, 16px)" : "calc(var(--sab, 16px) * .55)" }}>
+      <div className="hg-glass">
+      <div className="hg-drop" aria-hidden="true" style={{ transform: `translateX(${index * 100}%)` }}><LiquidIndicator /></div>
+      <div className="ios-mobile-nav-items">
+        {items.map(({ key, label, Icon, Active }) => {
+          const Glyph = tab === key ? Active : Icon;
+          return <Button key={key} className="ios-mobile-nav-item" onClick={() => setTab(key)}
+            aria-current={tab === key ? "page" : undefined}>
+            <Glyph size={22} /><span>{label}</span>
+          </Button>;
+        })}
       </div>
-    </nav>
-  );
+    </div>
+  </nav>;
 }
 
 /* ============ 堆栈页面 ============ */
@@ -153,7 +107,7 @@ function AppBody() {
     return () => window.removeEventListener("keydown", fn);
   }, [stack.length, pop, setTab, loginOpen, setLoginOpen]);
 
-  const vis = (k: Tab) => (tab === k ? "absolute inset-0" : "absolute inset-0 invisible pointer-events-none");
+  const vis = (k: Tab) => (tab === k ? `absolute inset-0 ${k === "home" ? "" : "ios-tab-active"}` : "absolute inset-0 hidden pointer-events-none");
   const pageActive = stack.length === 0 && !loginOpen;
   const bottomInset = isMobile ? (fs || clean ? 0 : 74) : 14;
   /* 栈页（从搜索/分类/我的进入的播放页、图文页）没有底栏，
@@ -165,13 +119,13 @@ function AppBody() {
     <div className={`absolute inset-0 flex bg-canvas plat-${platform}`}>
       {!isMobile && <DesktopRail collapsed={collapsed} />}
       <div ref={mainRef} className="relative flex-1 min-w-0 overflow-hidden win-main">
-        <div className={vis("home")}><Home active={pageActive && tab === "home"} bottomInset={bottomInset} /></div>
-        <div className={vis("search")}><Search active={pageActive && tab === "search"} wide={wide} /></div>
-        <div className={vis("category")}><Category wide={wide} active={pageActive && tab === "category"} /></div>
-        <div className={vis("profile")}><Profile wide={wide} /></div>
+        <div className={vis("home")} inert={!pageActive || tab !== "home"} aria-hidden={!pageActive || tab !== "home"}><Home active={pageActive && tab === "home"} bottomInset={bottomInset} /></div>
+        <div className={vis("search")} inert={!pageActive || tab !== "search"} aria-hidden={!pageActive || tab !== "search"}><Search active={pageActive && tab === "search"} wide={wide} /></div>
+        <div className={vis("category")} inert={!pageActive || tab !== "category"} aria-hidden={!pageActive || tab !== "category"}><Category wide={wide} active={pageActive && tab === "category"} /></div>
+        <div className={vis("profile")} inert={!pageActive || tab !== "profile"} aria-hidden={!pageActive || tab !== "profile"}><Profile wide={wide} /></div>
 
         {stack.map((p, i) => (
-          <div key={p.key} className="absolute inset-0 z-30 bg-bg a-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
+          <div key={p.key} inert={i !== stack.length - 1 || loginOpen} aria-hidden={i !== stack.length - 1 || loginOpen} className="absolute inset-0 z-30 bg-bg a-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
             <StackPage page={p} onBack={pop} wide={wide} top={i === stack.length - 1} bottomInset={stackInset} />
           </div>
         ))}
@@ -184,7 +138,13 @@ function AppBody() {
 
 /* ============ 桌面窗口壳（Windows / macOS / Linux）============ */
 function DesktopShell() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 1100);
+  useEffect(() => {
+    const query = matchMedia("(max-width: 1099px)");
+    const update = () => setCollapsed(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
   const { theater, platform } = useStore();
   return (
     <div className={`absolute inset-0 flex flex-col bg-canvas win-root plat-${platform}`}>
@@ -230,19 +190,19 @@ function ShellInner({ collapsed, theater }: { collapsed: boolean; theater: boole
     return () => window.removeEventListener("keydown", fn);
   }, [stack.length, pop, setTab, loginOpen, setLoginOpen]);
 
-  const vis = (k: Tab) => (tab === k ? "absolute inset-0" : "absolute inset-0 invisible pointer-events-none");
+  const vis = (k: Tab) => (tab === k ? `absolute inset-0 ${k === "home" ? "" : "ios-tab-active"}` : "absolute inset-0 hidden pointer-events-none");
   const pageActive = stack.length === 0 && !loginOpen;
 
   return (
     <div className={`absolute inset-0 flex bg-canvas plat-${platform}`}>
       {!theater && <DesktopRail collapsed={collapsed} />}
       <div ref={mainRef} className={`relative flex-1 min-w-0 overflow-hidden win-main ${theater ? "is-theater-main" : ""}`}>
-        <div className={vis("home")}><Home active={pageActive && tab === "home"} bottomInset={14} /></div>
-        <div className={vis("search")}><Search active={pageActive && tab === "search"} wide={wide} /></div>
-        <div className={vis("category")}><Category wide={wide} active={pageActive && tab === "category"} /></div>
-        <div className={vis("profile")}><Profile wide={wide} /></div>
+        <div className={vis("home")} inert={!pageActive || tab !== "home"} aria-hidden={!pageActive || tab !== "home"}><Home active={pageActive && tab === "home"} bottomInset={14} /></div>
+        <div className={vis("search")} inert={!pageActive || tab !== "search"} aria-hidden={!pageActive || tab !== "search"}><Search active={pageActive && tab === "search"} wide={wide} /></div>
+        <div className={vis("category")} inert={!pageActive || tab !== "category"} aria-hidden={!pageActive || tab !== "category"}><Category wide={wide} active={pageActive && tab === "category"} /></div>
+        <div className={vis("profile")} inert={!pageActive || tab !== "profile"} aria-hidden={!pageActive || tab !== "profile"}><Profile wide={wide} /></div>
         {stack.map((p, i) => (
-          <div key={p.key} className="absolute inset-0 z-30 bg-bg win-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
+          <div key={p.key} inert={i !== stack.length - 1 || loginOpen} aria-hidden={i !== stack.length - 1 || loginOpen} className="absolute inset-0 z-30 bg-bg win-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
             <StackPage page={p} onBack={pop} wide={wide} top={i === stack.length - 1} bottomInset={14} />
           </div>
         ))}
@@ -297,13 +257,13 @@ export default function App() {
   }, [platform]);
 
   /* —— 安卓硬件返回键 ——
-     层级：全屏 → 面板/弹层 → 登录框 → 页面栈 → 回首页 → 退出应用。
+     层级：面板/弹层 → 全屏 → 登录框 → 页面栈 → 回首页 → 退出应用。
      不注册这个监听，Tauri 会直接 webView.goBack() 或退出，表现就是「任意页面返回都回桌面」。 */
   const backRef = useRef<() => void>(() => {});
   backRef.current = () => {
+    if (runBack()) return;                                  // 最上层弹窗/播放器面板
     if (fs) { setFs(false); return; }                        // 沉浸全屏
     if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
-    if (runBack()) return;                                  // 播放器的选集/评论/图文面板
     if (loginOpen) { setLoginOpen(false); return; }
     if (stack.length) { pop(); return; }
     if (tab !== "home") { setTab("home"); return; }

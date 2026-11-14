@@ -10,7 +10,7 @@ use url::{Host, Url};
 
 /// 解析命令行参数与环境变量中的严格安全模式覆盖项。
 /// 支持 `--no-strict` / `--no-strict-security` / `--relaxed` / `--relaxed-security` 关闭，
-/// `--strict` / `--strict-security` 开启，以及 `HGHUB_STRICT=0|1|false|true`。
+/// `--strict` / `--strict-security` 开启，以及 `HGHUBX_STRICT=0|1|false|true`。
 pub fn parse_strict_override<I, S>(args: I, env_val: Option<&str>) -> Option<bool>
 where
     I: IntoIterator<Item = S>,
@@ -38,7 +38,7 @@ where
 pub fn cli_strict_override() -> Option<bool> {
     parse_strict_override(
         std::env::args(),
-        std::env::var("HGHUB_STRICT").ok().as_deref(),
+        crate::env::var("STRICT").as_deref(),
     )
 }
 

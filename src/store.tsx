@@ -1,10 +1,12 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, platform as envPlatform } from "./api";
 import { isStrictSecurity, setStrictSecurity as setHtmlStrictSecurity } from "./html";
 import type { User } from "./types";
+import { readStorage, STORAGE_KEYS } from "./storage";
 
 export type Platform = "android" | "ios" | "windows" | "macos" | "linux";
 export type Theme = "dark" | "light";
+export type ThemePreference = Theme | "system";
 export type Tab = "home" | "search" | "category" | "profile";
 
 /** 播放页上下文：ids 是来源列表，index 是当前条目。 */
@@ -75,7 +77,7 @@ type Persist = {
   preferHevc: boolean;
 };
 
-const LS = "hghub_app_v1";
+const LS = STORAGE_KEYS.app;
 const DEFAULTS: Persist = {
   likes: [], favs: [], history: [], follows: [],
   muted: true, muteOnStartup: true, volume: 0.7, searchHist: [], swipeEp: true, preferHevc: false,
@@ -100,7 +102,8 @@ function normalizeHistory(raw: unknown): WatchProgress[] {
 
 function loadPersist(): Persist {
   try {
-    const raw = localStorage.getItem(LS);
+    const raw = readStorage(LS);
+    const swipeMigration = readStorage(STORAGE_KEYS.swipeEp);
     if (!raw) return DEFAULTS;
     const p = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Persist>) };
     // 只在启动时应用；本次使用中取消静音不会关闭此偏好。
@@ -109,9 +112,9 @@ function loadPersist(): Persist {
        不是用户主动关的，所以这里做一次性迁移；用户之后自己关掉不会再被改回来。 */
     let swipeEp = p.swipeEp !== false;
     try {
-      if (localStorage.getItem("hghub_swipe_ep_v2") !== "1") {
+      if (swipeMigration !== "1") {
         swipeEp = true;
-        localStorage.setItem("hghub_swipe_ep_v2", "1");
+        localStorage.setItem(STORAGE_KEYS.swipeEp, "1");
       }
     } catch { /* ignore */ }
     return { ...p, swipeEp, muteOnStartup, muted: muteOnStartup || p.muted === true, history: normalizeHistory(p.history) };
@@ -120,22 +123,43 @@ function loadPersist(): Persist {
   }
 }
 
-function readTheme(): Theme {
+function readThemePreference(): ThemePreference {
   try {
-    return localStorage.getItem("hghub_theme") === "light" ? "light" : "dark";
+    const saved = readStorage(STORAGE_KEYS.theme);
+    if (saved === "light" || saved === "dark" || saved === "system") return saved;
+    return "system";
   } catch {
-    return "dark";
+    return "system";
   }
 }
 
+function resolveTheme(preference: ThemePreference): Theme {
+  if (preference !== "system") return preference;
+  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 function applyTheme(theme: Theme) {
-  document.documentElement.classList.toggle("theme-light", theme === "light");
+  const root = document.documentElement;
+  root.classList.toggle("theme-light", theme === "light");
   document.documentElement.style.colorScheme = theme;
+  root.dataset.theme = theme;
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (meta) meta.content = theme === "light" ? "#eeece7" : "#121212";
+}
+
+let themeTransitionTimer = 0;
+function beginThemeTransition() {
+  const root = document.documentElement;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  root.style.setProperty("--theme-transition-surface", getComputedStyle(root).getPropertyValue("--p-bg").trim());
+  root.classList.add("theme-transitioning");
+  window.clearTimeout(themeTransitionTimer);
+  themeTransitionTimer = window.setTimeout(() => root.classList.remove("theme-transitioning"), 420);
 }
 
 type Store = {
   platform: Platform;
-  theme: Theme; setTheme: (t: Theme) => void;
+  theme: Theme; themePreference: ThemePreference; setTheme: (t: ThemePreference) => void;
   tab: Tab; setTab: (t: Tab) => void;
   stack: Page[]; push: (p: PageInput) => void; pop: () => void;
   user: User | null; setUser: (u: User | null) => void;
@@ -171,7 +195,9 @@ let seq = 0;
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [p, setP] = useState<Persist>(loadPersist);
-  const [theme, setThemeState] = useState<Theme>(readTheme);
+  const [themePreference, setThemePreferenceState] = useState<ThemePreference>(readThemePreference);
+  const [theme, setThemeState] = useState<Theme>(() => resolveTheme(readThemePreference()));
+  const themeRef = useRef(theme);
   const [tab, setTabRaw] = useState<Tab>("home");
   const [stack, setStack] = useState<Page[]>([]);
   const [user, setUser] = useState<User | null>(null);
@@ -188,26 +214,61 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const toastSeq = useRef(0);
 
   useEffect(() => {
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    const sync = () => {
+      const next = resolveTheme(themePreference);
+      if (themeRef.current !== next) beginThemeTransition();
+      themeRef.current = next;
+      setThemeState(next);
+    };
+    sync();
+    if (themePreference === "system") {
+      media.addEventListener?.("change", sync);
+      return () => media.removeEventListener?.("change", sync);
+    }
+  }, [themePreference]);
+
+  useLayoutEffect(() => {
     applyTheme(theme);
-    try { localStorage.setItem("hghub_theme", theme); } catch { /* ignore */ }
-  }, [theme]);
+    try { localStorage.setItem(STORAGE_KEYS.theme, themePreference); } catch { /* ignore */ }
+  }, [theme, themePreference]);
+
+  const setTheme = useCallback((next: ThemePreference) => {
+    const resolved = resolveTheme(next);
+    if (resolved !== themeRef.current) beginThemeTransition();
+    themeRef.current = resolved;
+    setThemePreferenceState(next);
+    setThemeState(resolved);
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem(LS, JSON.stringify(p)); } catch { /* ignore */ }
   }, [p]);
 
   useEffect(() => {
-    api.boot()
-      .then((r) => {
-        if (r.user && (r.user as User).id) setUser(r.user as User);
+    let request = 0;
+    let active = true;
+    const readBoot = () => {
+      const current = ++request;
+      void api.boot().then((r) => {
+        if (!active || current !== request) return;
+        setUser(r.user && (r.user as User).id ? r.user as User : null);
         if (typeof r.strict_security === "boolean") {
           setStrictSecurityState(r.strict_security);
           setHtmlStrictSecurity(r.strict_security);
           setStrictSecurityReady(true);
         }
         setCliRelaxed(!!r.cli_relaxed);
-      })
-      .catch(() => { /* 离线也能用 */ });
+      }).catch(() => { /* 离线也能用 */ });
+    };
+    readBoot();
+    window.addEventListener("hg:line-changed", readBoot);
+    window.addEventListener("hg:proxy-changed", readBoot);
+    return () => {
+      active = false;
+      window.removeEventListener("hg:line-changed", readBoot);
+      window.removeEventListener("hg:proxy-changed", readBoot);
+    };
   }, []);
 
   const setStrictSecurity = useCallback(async (on: boolean) => {
@@ -266,10 +327,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const bump = () => setLineEpoch((n) => n + 1);
     window.addEventListener("hg:line-changed", bump);
-    return () => window.removeEventListener("hg:line-changed", bump);
+    window.addEventListener("hg:proxy-changed", bump);
+    return () => {
+      window.removeEventListener("hg:line-changed", bump);
+      window.removeEventListener("hg:proxy-changed", bump);
+    };
   }, []);
 
-  const setTab = useCallback((t: Tab) => { setTabRaw(t); setStack([]); }, []);
+  const setTab = useCallback((t: Tab) => { setTabRaw(t); setStack(s => s.length ? [] : s); }, []);
   const push = useCallback((pg: PageInput) => {
     setStack((s) => [...s, { ...pg, key: `p${++seq}` } as Page]);
   }, []);
@@ -361,7 +426,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<Store>(() => ({
     platform: envPlatform,
-    theme, setTheme: setThemeState,
+    theme, themePreference, setTheme,
     tab, setTab, stack, push, pop,
     user, setUser, loginOpen, setLoginOpen, logout,
     likes: p.likes, favs: p.favs, history: p.history, follows: p.follows,
@@ -375,7 +440,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     searchHist: p.searchHist, addSearch, clearSearchHist,
     strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, lineEpoch,
-  }), [theme, tab, setTab, stack, push, pop, user, loginOpen, logout,
+  }), [theme, themePreference, setTheme, tab, setTab, stack, push, pop, user, loginOpen, logout,
     p, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory,
     setMuted, setMuteOnStartup, setSwipeEp, setPreferHevc, setVolume, addSearch, clearSearchHist, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, lineEpoch, theater, setTheater, fs, setFs, clean, setClean]);

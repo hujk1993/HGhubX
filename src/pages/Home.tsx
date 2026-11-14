@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader } from "../components/ios/effects";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Feed from "../components/Feed";
 import { api } from "../api";
 import type { VideoCard } from "../types";
@@ -84,7 +85,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lineEpoch]);
 
-  const ids = items.map((v) => v.id);
+  const ids = useMemo(() => items.map((v) => v.id), [items]);
 
   return (
     <div className="absolute inset-0 bg-black">
@@ -98,7 +99,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
       ) : !loading && done ? (
         <div className="absolute inset-0 flex items-center justify-center bg-bg"><Empty icon={<ISearch size={26} />} title="暂无视频" /></div>
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center"><div className="w-9 h-9 spinner" /></div>
+        <div className="absolute inset-0 flex items-center justify-center"><Loader className="w-9 h-9 spinner" /></div>
       )}
     </div>
   );

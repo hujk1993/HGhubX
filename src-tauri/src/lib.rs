@@ -1,9 +1,14 @@
 mod api;
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+mod apple_proxy;
+mod env;
 #[cfg(target_os = "ios")]
 mod ios_layout;
 mod lines;
 #[cfg(target_os = "linux")]
 mod linux_http;
+#[cfg(target_os = "linux")]
+mod linux_webview;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
@@ -12,6 +17,8 @@ mod media_dns;
 mod net;
 mod network_policy;
 mod playback_log;
+mod proxy;
+mod search_hot;
 mod session;
 
 use api::Api;
@@ -99,6 +106,12 @@ pub fn run() {
         })
         .plugin(
             tauri::plugin::Builder::<_, ()>::new("navigation-guard")
+                .on_webview_ready(|webview| {
+                    #[cfg(target_os = "linux")]
+                    linux_webview::configure(&webview);
+                    #[cfg(not(target_os = "linux"))]
+                    let _ = webview;
+                })
                 .on_navigation(|_webview, url| {
                     let host = url.host_str().unwrap_or("");
                     (url.scheme() == "tauri" && host == "localhost")
@@ -180,11 +193,17 @@ pub fn run() {
             api::net_diag,
             api::line_state,
             api::line_set,
+            api::line_custom_set,
+            api::line_reset,
+            api::line_cancel,
             api::line_mirrors,
             api::line_probe,
             api::line_auto,
             api::line_try_main,
             api::line_health,
+            api::proxy_state,
+            api::proxy_set,
+            api::proxy_test,
             api::check_update,
             api::open_url,
             api::set_orientation,
