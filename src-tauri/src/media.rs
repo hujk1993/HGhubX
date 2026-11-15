@@ -10,7 +10,7 @@ use aes::Aes128;
 use once_cell::sync::Lazy;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex, Weak};
 use tauri::http::{Response, StatusCode};
 
 /// 本平台自定义协议的完整基址。
@@ -31,6 +31,13 @@ const IMG_IV: &[u8] = b"97b60394abc2fbe1";
 
 static IMG_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<u8>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+type ImageResult = Result<(String, Arc<Vec<u8>>), String>;
+type ImageLoad = tokio::sync::OnceCell<ImageResult>;
+// 背景、视频 poster 和详情可能同时请求同一张图，共享下载和解密。
+// 弱引用不保留已完成任务/错误；图片重试仍可发起新的请求。
+static IMG_LOADING: Lazy<Mutex<HashMap<(u64, String), Weak<ImageLoad>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static IMG_GENERATION: AtomicU64 = AtomicU64::new(0);
 static PL_CACHE: Lazy<Mutex<HashMap<String, Arc<String>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 /// AES Key / 分片：拖进度条时同一 key、同一片会被反复拉，缓存住省一次往返。
@@ -107,8 +114,33 @@ fn image_kind(buf: &[u8]) -> Option<&'static str> {
     None
 }
 
-/// 取封面：命中缓存直接返回，否则下载并按需解密。
-pub async fn load_image(url: &str) -> Result<(String, Arc<Vec<u8>>), String> {
+/// 取封面：命中缓存直接返回；同地址的进行中请求共享下载和解密结果。
+pub async fn load_image(url: &str) -> ImageResult {
+    let generation = {
+        let cache = IMG_CACHE.lock().unwrap();
+        if let Some(hit) = cache.get(url).cloned() {
+            let kind = image_kind(&hit).unwrap_or("image/jpeg");
+            return Ok((kind.to_string(), hit));
+        }
+        IMG_GENERATION.load(Ordering::Acquire)
+    };
+    let loading = {
+        let mut requests = IMG_LOADING.lock().unwrap();
+        requests.retain(|_, request| request.strong_count() > 0);
+        let key = (generation, url.to_string());
+        if let Some(request) = requests.get(&key).and_then(Weak::upgrade) {
+            request
+        } else {
+            let request = Arc::new(ImageLoad::new());
+            requests.insert(key, Arc::downgrade(&request));
+            request
+        }
+    };
+    loading.get_or_init(|| download_image(url, generation)).await.clone()
+}
+
+async fn download_image(url: &str, generation: u64) -> ImageResult {
+    // 缓存检查与领取任务之间，另一请求可能已完成。
     if let Some(hit) = IMG_CACHE.lock().unwrap().get(url).cloned() {
         let kind = image_kind(&hit).unwrap_or("image/jpeg");
         return Ok((kind.to_string(), hit));
@@ -122,7 +154,16 @@ pub async fn load_image(url: &str) -> Result<(String, Arc<Vec<u8>>), String> {
     };
     let kind = image_kind(&plain).unwrap_or("image/jpeg").to_string();
     let arc = Arc::new(plain);
-    cache_put(&IMG_CACHE, url.to_string(), arc.clone(), IMG_CACHE_MAX);
+    let mut cache = IMG_CACHE.lock().unwrap();
+    // 清缓存后，旧下载可完成当前显示，但不再把结果写回新一代缓存。
+    if IMG_GENERATION.load(Ordering::Acquire) == generation {
+        if cache.len() >= IMG_CACHE_MAX {
+            if let Some(key) = cache.keys().next().cloned() {
+                cache.remove(&key);
+            }
+        }
+        cache.insert(url.to_string(), arc.clone());
+    }
     Ok((kind, arc))
 }
 
@@ -296,6 +337,7 @@ pub async fn load_segment(url: &str) -> Result<(Option<String>, Arc<Vec<u8>>), S
 /// 清空封面 / 播放列表 / Key / 分片内存缓存
 pub fn clear_caches() {
     if let Ok(mut g) = IMG_CACHE.lock() {
+        IMG_GENERATION.fetch_add(1, Ordering::AcqRel);
         g.clear();
     }
     if let Ok(mut g) = PL_CACHE.lock() {
@@ -316,14 +358,71 @@ fn respond(status: u16, ctype: &str, body: Vec<u8>, cache: &str) -> Response<Vec
     Response::builder()
         .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
         .header("Content-Type", ctype)
-        // WKWebView 需要 Content-Length / Accept-Ranges 才肯复用已缓冲的分片
+        // 范围处理在清单改写/解密后统一应用，长度以最终响应字节为准。
         .header("Content-Length", len)
-        .header("Accept-Ranges", "bytes")
-        .header("Access-Control-Expose-Headers", "Content-Length, Content-Type, Accept-Ranges")
+        .header("Access-Control-Expose-Headers", "Content-Length, Content-Type, Accept-Ranges, Content-Range")
         .header("X-Content-Type-Options", "nosniff")
         .header("Cache-Control", cache)
         .body(body)
         .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+/// 为原生播放器提供单段 byte range；无效/多段范围按 HTTP 语义退回完整 200。
+fn apply_byte_range(mut response: Response<Vec<u8>>, range: Option<&str>) -> Response<Vec<u8>> {
+    use tauri::http::HeaderValue;
+
+    if response.status() != StatusCode::OK {
+        return response;
+    }
+    response.headers_mut().insert("Accept-Ranges", HeaderValue::from_static("bytes"));
+    let Some((first, last)) = range
+        .and_then(|v| v.trim().strip_prefix("bytes="))
+        .and_then(|v| v.split_once('-'))
+    else {
+        return response;
+    };
+    let number = |s: &str| -> Option<usize> {
+        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+            None
+        } else {
+            s.parse().ok()
+        }
+    };
+    let len = response.body().len();
+    let bounds = if first.is_empty() {
+        let Some(suffix) = number(last) else { return response };
+        (suffix > 0 && len > 0).then(|| (len.saturating_sub(suffix), len - 1))
+    } else {
+        let Some(start) = number(first) else { return response };
+        let end = if last.is_empty() {
+            len.saturating_sub(1)
+        } else {
+            let Some(end) = number(last) else { return response };
+            if end < start { return response; }
+            end
+        };
+        (start < len).then(|| (start, end.min(len - 1)))
+    };
+
+    let content_range = if let Some((start, end)) = bounds {
+        // 原响应已经持有完整字节；原位截取，避免再复制完整视频分片。
+        let body = response.body_mut();
+        body.truncate(end + 1);
+        if start > 0 {
+            body.drain(..start);
+        }
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+        format!("bytes {start}-{end}/{len}")
+    } else {
+        response.body_mut().clear();
+        *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+        response.headers_mut().insert("Cache-Control", HeaderValue::from_static("no-store"));
+        format!("bytes */{len}")
+    };
+    let length = response.body().len().to_string();
+    response.headers_mut().insert("Content-Length", HeaderValue::from_str(&length).unwrap());
+    response.headers_mut().insert("Content-Range", HeaderValue::from_str(&content_range).unwrap());
+    response
 }
 
 /// 主清单的子清单也经 /seg 返回：必须继续改写，不能把内层 URL 原样交给播放器。
@@ -365,7 +464,7 @@ fn segment_response(
 ///
 /// `origin` 是本平台自定义协议的完整基址，见 [`LOCAL_ORIGIN`]；用于改写 m3u8 里的
 /// 分片与 key 地址。正常情况下调用方直接传 [`LOCAL_ORIGIN`]。
-pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> {
+pub async fn handle(path: &str, query: &str, origin: &str, range: Option<&str>) -> Response<Vec<u8>> {
     let target = query
         .split('&')
         .find_map(|kv| kv.strip_prefix("u="))
@@ -409,9 +508,10 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
         },
         _ => respond(404, "text/plain", b"not found".to_vec(), "no-store"),
     };
+    let response = apply_byte_range(response, range);
     crate::playback_log::record(
         "proxy.end",
-        serde_json::json!({"route": route, "resource": crate::playback_log::resource_id(&target), "status": response.status().as_u16(), "bytes": response.body().len(), "elapsed_ms": started.elapsed().as_millis() as u64}),
+        serde_json::json!({"route": route, "resource": crate::playback_log::resource_id(&target), "status": response.status().as_u16(), "bytes": response.body().len(), "content_type": response.headers().get("Content-Type").and_then(|v| v.to_str().ok()), "content_range": response.headers().get("Content-Range").and_then(|v| v.to_str().ok()), "elapsed_ms": started.elapsed().as_millis() as u64}),
     );
     response
 }
@@ -419,6 +519,49 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_range_probe_returns_only_requested_playlist_bytes() {
+        let body = b"#EXTM3U\n#EXTINF:4,\nsegment.ts\n";
+        for (range, start, end) in [
+            ("bytes=0-1", 0, 1),
+            ("bytes=0-7", 0, 7),
+            ("bytes=8-", 8, body.len() - 1),
+            ("bytes=-4", body.len() - 4, body.len() - 1),
+            ("bytes=0-999", 0, body.len() - 1),
+        ] {
+            let response = apply_byte_range(
+                respond(200, "application/vnd.apple.mpegurl", body.to_vec(), "no-store"),
+                Some(range),
+            );
+            assert_eq!(response.status(), 206, "{range}");
+            assert_eq!(response.body().as_slice(), &body[start..=end]);
+            assert_eq!(response.headers()["Content-Type"], "application/vnd.apple.mpegurl");
+            assert_eq!(response.headers()["Content-Length"], (end - start + 1).to_string());
+            assert_eq!(response.headers()["Content-Range"], format!("bytes {start}-{end}/{}", body.len()));
+        }
+    }
+
+    #[test]
+    fn ranges_preserve_full_responses_and_reject_unsatisfiable_offsets() {
+        for range in [None, Some("bytes=0-1,4-5"), Some("bytes=bad"), Some("bytes=3-1"), Some("items=0-1")] {
+            let response = apply_byte_range(respond(200, "video/mp2t", b"data".to_vec(), "no-store"), range);
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.body(), b"data");
+            assert!(!response.headers().contains_key("Content-Range"));
+        }
+        for (body, range) in [(b"data".as_slice(), "bytes=4-"), (b"data".as_slice(), "bytes=-0"), (b"".as_slice(), "bytes=0-1")] {
+            let response = apply_byte_range(respond(200, "video/mp2t", body.to_vec(), "no-store"), Some(range));
+            assert_eq!(response.status(), 416);
+            assert!(response.body().is_empty());
+            assert_eq!(response.headers()["Content-Length"], "0");
+            assert_eq!(response.headers()["Content-Range"], format!("bytes */{}", body.len()));
+        }
+        let error = apply_byte_range(respond(502, "text/plain", b"upstream failed".to_vec(), "no-store"), Some("bytes=0-1"));
+        assert_eq!(error.status(), 502);
+        assert_eq!(error.body(), b"upstream failed");
+        assert!(!error.headers().contains_key("Accept-Ranges"));
+    }
 
     #[test]
     fn dateranges_keep_timing_and_scte_metadata_but_drop_external_resources() {
@@ -503,7 +646,7 @@ mod tests {
             &text[..text.len().min(160)]
         );
         let q = format!("u={}", enc(&url));
-        let resp = handle("/hls", &q, LOCAL_ORIGIN).await;
+        let resp = handle("/hls", &q, LOCAL_ORIGIN, None).await;
         let body = String::from_utf8_lossy(resp.body()).to_string();
         println!("proxied status={} len={}", resp.status(), body.len());
         assert!(body.contains("#EXTM3U"));
@@ -515,7 +658,7 @@ mod tests {
             .to_string();
         println!("seg line: {}", &seg_line[..seg_line.len().min(120)]);
         let seg_q = seg_line.split("?u=").nth(1).unwrap();
-        let seg = handle("/seg", &format!("u={seg_q}"), LOCAL_ORIGIN).await;
+        let seg = handle("/seg", &format!("u={seg_q}"), LOCAL_ORIGIN, None).await;
         println!("segment status={} len={}", seg.status(), seg.body().len());
         assert_eq!(seg.status(), 200);
         assert!(seg.body().len() > 1000);

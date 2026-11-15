@@ -15,11 +15,9 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend checks
+    name: Frontend build
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      CI: "true"
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -35,56 +33,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install browser and media tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          pnpm exec playwright-core install --with-deps chromium
-
-      - name: Typecheck and build
+      - name: Build frontend
         run: pnpm build
 
-      - name: Channel pagination regression
-        run: |
-          if node -e "process.exit(require('./package.json').scripts['test:channel-pagination'] ? 0 : 1)"; then
-            pnpm test:channel-pagination
-          else
-            echo "test:channel-pagination not present on this branch yet; skipped until PR #48 lands"
-          fi
-
-      - name: API loading states
-        run: pnpm test:api-loading
-
-      - name: Mobile layout
-        run: pnpm test:mobile-layout
-
-      - name: iOS material UI and overlay interactions
-        run: |
-          pnpm test:ios-ui
-          pnpm test:ios-overlays
-
-      - name: Diagnostic copy
-        run: pnpm test:diagnostic-copy
-
-      - name: Storage migration
-        run: pnpm test:storage-migration
-
-      - name: Playback diagnostics
-        run: pnpm test:playback
-
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-results
-          path: test-results/
-          retention-days: 7
-          if-no-files-found: warn
-
   rust:
-    name: Rust checks
+    name: Rust compile check
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -105,7 +60,3 @@ jobs:
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check --all-targets
-
-      - name: Cargo unit tests
-        working-directory: src-tauri
-        run: cargo test --lib

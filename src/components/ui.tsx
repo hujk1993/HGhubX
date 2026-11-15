@@ -1,9 +1,10 @@
 import { Button, Image, Surface } from "./ios/controls";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import { cover, platform } from "../api";
-export { Sheet, Modal, DockPanel } from "./ios/overlays";
+export { Sheet, Modal } from "./ios/overlays";
 import { useStore } from "../store";
-import { IBoltF, ICheck, IClose, IGlobe, IHeartF, IMinus, ISparkF, IStarF } from "../icons";
+import { Loader } from "./ios/effects";
+import { IBoltF, ICheck, IGlobe, IHeartF, IMinus, ISparkF, IStarF } from "../icons";
 
 /* ——— 头像 ——— */
 export function Avatar({ hue = 250, icon, name, size = 40, ring = false, className = "" }: {
@@ -23,10 +24,12 @@ export function Avatar({ hue = 250, icon, name, size = 40, ring = false, classNa
 }
 
 /* ——— 开关 ——— */
-export function Toggle({ on, onChange, label, disabled = false }: { on: boolean; onChange: (b: boolean) => void; label?: string; disabled?: boolean }) {
+export function Toggle({ on, onChange, label, disabled = false, desktop = false }: {
+  on: boolean; onChange: (b: boolean) => void; label?: string; disabled?: boolean; desktop?: boolean;
+}) {
   return (
     <Button disabled={disabled} onClick={() => onChange(!on)} role="switch" aria-checked={on} aria-label={label}
-      className="ios-switch" data-platform={platform} data-state={on ? "on" : "off"}>
+      className="ios-switch" data-platform={desktop ? "desktop" : platform} data-state={on ? "on" : "off"}>
       <span className="ios-switch-track" aria-hidden="true">
         <span className="ios-switch-thumb">
           <ICheck size={14} className="ios-switch-mark is-on" />
@@ -51,11 +54,6 @@ export function Empty({ icon, title, sub, action, onAction }: {
       )}
     </div>
   );
-}
-
-/* ——— 键帽 ——— */
-export function Kbd({ children }: { children: React.ReactNode }) {
-  return <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-(--r-ctl) bg-s4 text-[12px] font-semibold text-on/85 elev-1">{children}</span>;
 }
 
 /* ——— Toast ——— */
@@ -115,52 +113,33 @@ export function ToastHost() {
   );
 }
 
-/* ——— 长按 ——— */
-export function useLongPress(cb: (e: { clientX: number; clientY: number }) => void, ms = 480) {
-  const timer = useRef<number | undefined>(undefined);
-  const start = useRef({ x: 0, y: 0 });
-  const fired = useRef(false);
-  const clear = () => { window.clearTimeout(timer.current); };
-  return {
-    onPointerDown: (e: React.PointerEvent) => {
-      fired.current = false;
-      start.current = { x: e.clientX, y: e.clientY };
-      const { clientX, clientY } = e;
-      timer.current = window.setTimeout(() => { fired.current = true; cb({ clientX, clientY }); }, ms);
-    },
-    onPointerMove: (e: React.PointerEvent) => {
-      if (Math.abs(e.clientX - start.current.x) > 10 || Math.abs(e.clientY - start.current.y) > 10) clear();
-    },
-    onPointerUp: clear,
-    onPointerLeave: clear,
-    onClickCapture: (e: React.MouseEvent) => { if (fired.current) { e.stopPropagation(); e.preventDefault(); fired.current = false; } },
-    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); cb({ clientX: e.clientX, clientY: e.clientY }); },
-  };
-}
-
-/* ——— 关闭按钮 ——— */
-export function CloseBtn({ onClick }: { onClick: () => void }) {
-  return (
-    <Button aria-label="关闭" onClick={onClick} className="ios-icon-button bg-s3/80 text-mut">
-      <IClose size={16} />
-    </Button>
-  );
-}
-
 /* ——— 图片（骨架 + 渐显，自动走本地解密协议） ——— */
-export function Img({ src, alt = "", className = "", eager = false, raw = false }: {
-  src: string; alt?: string; className?: string; eager?: boolean; raw?: boolean;
+export function Img({ src, alt = "", className = "", eager = false, raw = false, loadingIndicator = false }: {
+  src: string; alt?: string; className?: string; eager?: boolean; raw?: boolean; loadingIndicator?: boolean;
+}) {
+  const url = raw ? src : cover(src);
+  // 每个地址独立持有状态，避免换图后的 effect 把缓存命中的 onLoad 重置掉。
+  return <ImageLoad key={url} url={url} alt={alt} className={className} eager={eager} raw={raw} loadingIndicator={loadingIndicator} />;
+}
+
+function ImageLoad({ url, alt, className, eager, raw, loadingIndicator }: {
+  url: string; alt: string; className: string; eager: boolean; raw: boolean; loadingIndicator: boolean;
 }) {
   const [ok, setOk] = useState(false);
   const [err, setErr] = useState(false);
-  const url = raw ? src : cover(src);
-  useEffect(() => { setOk(false); setErr(false); }, [url]);
+  const [attempt, setAttempt] = useState(0);
+  /* 封面走本地解密代理，网络抖动会偶发失败：同地址重试两次再落到占位。
+     代理入口只读 `u`，多余查询参数会被忽略，用它做重试的缓存戳。 */
+  const retryUrl = !url || raw || attempt === 0 ? url : `${url}${url.includes("?") ? "&" : "?"}r=${attempt}`;
   return (
     <div className={`ios-image absolute inset-0 overflow-hidden ${className}`} data-ui="image-frame">
       {!ok && !err && <div className="absolute inset-0 shimmer" />}
-      {err && <div className="ios-image-error" role="img" aria-label={alt || "封面暂不可用"}>HG</div>}
-      <Image src={url} alt={alt} loading={eager ? "eager" : "lazy"} onLoad={() => setOk(true)} onError={() => setErr(true)}
-        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${ok ? "opacity-100" : "opacity-0"}`} draggable={false} />
+      {loadingIndicator && !ok && <div className="absolute inset-0 grid place-items-center"><Loader label="封面加载中" /></div>}
+      {err && !loadingIndicator && <div className="ios-image-error" role="img" aria-label={alt || "封面暂不可用"}>HG</div>}
+      {url && <Image src={retryUrl} alt={alt} loading={eager ? "eager" : "lazy"}
+        onLoad={() => { setOk(true); setErr(false); }}
+        onError={() => { if (!raw && attempt < 2) setAttempt(attempt + 1); else setErr(true); }}
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${ok ? "opacity-100" : "opacity-0"}`} draggable={false} />}
     </div>
   );
 }

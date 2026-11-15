@@ -3,6 +3,7 @@ import { api, platform as envPlatform } from "./api";
 import { isStrictSecurity, setStrictSecurity as setHtmlStrictSecurity } from "./html";
 import type { User } from "./types";
 import { readStorage, STORAGE_KEYS } from "./storage";
+import { useAccountData } from "./accountData";
 
 export type Platform = "android" | "ios" | "windows" | "macos" | "linux";
 export type Theme = "dark" | "light";
@@ -27,7 +28,7 @@ export type Page =
   | FeedContext
   | { kind: "channel"; key: string; cate: string; name: string }
   | { kind: "ranks"; key: string }
-  | { kind: "settings"; key: string }
+  | { kind: "settings"; key: string; section?: "内容偏好" }
   | { kind: "posts"; key: string }
   | { kind: "post"; key: string; id: number }
   | { kind: "topics"; key: string }
@@ -41,7 +42,7 @@ export type PageInput =
   | { kind: "feed"; videoIds: number[]; index: number; title: string; source?: string; feedKind?: "video" | "post"; startEp?: number; startTime?: number }
   | { kind: "channel"; cate: string; name: string }
   | { kind: "ranks" }
-  | { kind: "settings" }
+  | { kind: "settings"; section?: "内容偏好" }
   | { kind: "posts" }
   | { kind: "post"; id: number }
   | { kind: "topics" }
@@ -162,16 +163,22 @@ type Store = {
   theme: Theme; themePreference: ThemePreference; setTheme: (t: ThemePreference) => void;
   tab: Tab; setTab: (t: Tab) => void;
   stack: Page[]; push: (p: PageInput) => void; pop: () => void;
-  user: User | null; setUser: (u: User | null) => void;
+  user: User | null; setUser: (u: User | null, origin?: string) => void;
+  accountScope: string; accountSync: { busy: boolean; error: string; lastSynced: number };
+  syncAccount: () => Promise<void>;
+  setCollected: (kind: "video" | "post", id: number, on: boolean) => Promise<void>;
+  setLiked: (kind: "video" | "post", id: number, ep: number, on: boolean) => Promise<void>;
+  setFollowing: (id: number, on: boolean) => Promise<void>;
+  actionPending: (key: string) => boolean;
   loginOpen: boolean; setLoginOpen: (b: boolean) => void;
   logout: () => Promise<void>;
   likes: number[]; favs: number[]; history: WatchProgress[]; follows: number[];
-  isLiked: (id: number) => boolean; isFav: (id: number) => boolean;
+  isLiked: (id: number, ep?: number, kind?: "video" | "post") => boolean; isFav: (id: number, kind?: "video" | "post") => boolean;
   toggleLikeLocal: (id: number) => boolean;
   toggleFavLocal: (id: number) => boolean;
   /** 记一条观看记录；`ep/t/dur` 省略时保留原进度，`ep` 变了就把进度归零 */
   addHistory: (id: number, ep?: number, t?: number, dur?: number) => void;
-  clearHistory: () => void;
+  clearHistory: () => Promise<void>;
   toggleFollowLocal: (uid: number) => boolean;
   theater: boolean; setTheater: (v: boolean | ((p: boolean) => boolean)) => void;
   fs: boolean; setFs: (v: boolean | ((p: boolean) => boolean)) => void;
@@ -200,7 +207,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const themeRef = useRef(theme);
   const [tab, setTabRaw] = useState<Tab>("home");
   const [stack, setStack] = useState<Page[]>([]);
-  const [user, setUser] = useState<User | null>(null);
+  const account = useAccountData(p, data => setP(previous => ({ ...previous, ...data })));
+  const { user, setUser } = account;
+  const accountRef = useRef(account); accountRef.current = account;
   const [loginOpen, setLoginOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [lineEpoch, setLineEpoch] = useState(0);
@@ -250,9 +259,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let active = true;
     const readBoot = () => {
       const current = ++request;
+      const generation = accountRef.current.generation();
       void api.boot().then((r) => {
         if (!active || current !== request) return;
-        setUser(r.user && (r.user as User).id ? r.user as User : null);
+        accountRef.current.restoreSession(r.user && (r.user as User).id ? r.user as User : null, r.base || "", generation);
         if (typeof r.strict_security === "boolean") {
           setStrictSecurityState(r.strict_security);
           setHtmlStrictSecurity(r.strict_security);
@@ -262,12 +272,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }).catch(() => { /* 离线也能用 */ });
     };
     readBoot();
-    window.addEventListener("hg:line-changed", readBoot);
-    window.addEventListener("hg:proxy-changed", readBoot);
+    const changed = () => { accountRef.current.setUser(null); readBoot(); };
+    window.addEventListener("hg:line-changed", changed);
+    window.addEventListener("hg:proxy-changed", changed);
     return () => {
       active = false;
-      window.removeEventListener("hg:line-changed", readBoot);
-      window.removeEventListener("hg:proxy-changed", readBoot);
+      window.removeEventListener("hg:line-changed", changed);
+      window.removeEventListener("hg:proxy-changed", changed);
     };
   }, []);
 
@@ -335,51 +346,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setTab = useCallback((t: Tab) => { setTabRaw(t); setStack(s => s.length ? [] : s); }, []);
+  useEffect(() => { if (tab === "profile") void accountRef.current.syncAccount().catch(() => {}); }, [tab]);
   const push = useCallback((pg: PageInput) => {
     setStack((s) => [...s, { ...pg, key: `p${++seq}` } as Page]);
   }, []);
   const pop = useCallback(() => setStack((s) => s.slice(0, -1)), []);
 
-  const toggleLikeLocal = useCallback((id: number) => {
-    let on = false;
-    setP((s) => {
-      on = !s.likes.includes(id);
-      return { ...s, likes: on ? [id, ...s.likes] : s.likes.filter((x) => x !== id) };
-    });
-    return on;
-  }, []);
-  const toggleFavLocal = useCallback((id: number) => {
-    let on = false;
-    setP((s) => {
-      on = !s.favs.includes(id);
-      return { ...s, favs: on ? [id, ...s.favs] : s.favs.filter((x) => x !== id) };
-    });
-    return on;
-  }, []);
-  const toggleFollowLocal = useCallback((uid: number) => {
-    let on = false;
-    setP((s) => {
-      on = !s.follows.includes(uid);
-      return { ...s, follows: on ? [uid, ...s.follows] : s.follows.filter((x) => x !== uid) };
-    });
-    return on;
-  }, []);
-  const addHistory = useCallback((id: number, ep?: number, t?: number, dur?: number) => {
-    if (!id) return;
-    setP((s) => {
-      const prev = s.history.find((x) => x.id === id);
-      const epChanged = ep !== undefined && prev !== undefined && prev.ep !== ep;
-      const entry: WatchProgress = {
-        id,
-        ep: ep ?? prev?.ep ?? 1,
-        t: epChanged ? 0 : (t ?? prev?.t ?? 0),
-        dur: dur ?? prev?.dur ?? 0,
-        at: Date.now(),
-      };
-      return { ...s, history: [entry, ...s.history.filter((x) => x.id !== id)].slice(0, 80) };
-    });
-  }, []);
-  const clearHistory = useCallback(() => setP((s) => ({ ...s, history: [] })), []);
   const addSearch = useCallback((q: string) => {
     const t = q.trim();
     if (!t) return;
@@ -388,8 +360,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const clearSearchHist = useCallback(() => setP((s) => ({ ...s, searchHist: [] })), []);
 
   const logout = useCallback(async () => {
-    try { await api.logout(); } catch { /* ignore */ }
-    setUser(null);
+    await accountRef.current.logout();
     toast("已退出登录", "info");
   }, [toast]);
 
@@ -429,10 +400,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     theme, themePreference, setTheme,
     tab, setTab, stack, push, pop,
     user, setUser, loginOpen, setLoginOpen, logout,
-    likes: p.likes, favs: p.favs, history: p.history, follows: p.follows,
-    isLiked: (id) => p.likes.includes(id),
-    isFav: (id) => p.favs.includes(id),
-    toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory,
+    accountScope: account.accountScope, accountSync: account.accountSync, syncAccount: account.syncAccount,
+    likes: account.likes, favs: account.favs, history: account.history, follows: account.follows,
+    isLiked: account.isLiked, isFav: account.isFav,
+    setCollected: account.setCollected, setLiked: account.setLiked, setFollowing: account.setFollowing, actionPending: account.actionPending,
+    toggleLikeLocal: account.toggleLikeLocal, toggleFavLocal: account.toggleFavLocal, toggleFollowLocal: account.toggleFollowLocal,
+    addHistory: account.addHistory, clearHistory: account.clearHistory,
     muted: p.muted, setMuted, volume: p.volume, setVolume, theater, setTheater, fs, setFs, clean, setClean,
     muteOnStartup: p.muteOnStartup, setMuteOnStartup,
     swipeEp: p.swipeEp, setSwipeEp,
@@ -441,7 +414,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, lineEpoch,
   }), [theme, themePreference, setTheme, tab, setTab, stack, push, pop, user, loginOpen, logout,
-    p, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory,
+    p, account,
     setMuted, setMuteOnStartup, setSwipeEp, setPreferHevc, setVolume, addSearch, clearSearchHist, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, lineEpoch, theater, setTheater, fs, setFs, clean, setClean]);
 

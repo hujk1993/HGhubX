@@ -1,6 +1,6 @@
 import { Button, Form, Image, Input } from "./ios/controls";
 import { Loader } from "./ios/effects";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, fmt, cover as imageCover } from "../api";
 import { handleArticleClick, sanitizeHtml } from "../html";
 import type { Comment, CommentPage, Episode } from "../types";
@@ -37,7 +37,7 @@ export function EpisodesPanel({ videoId, episodes, current, onPick, onClose, bar
       <div className="flex-1 scroll-y px-4 pb-4">
         <div className="grid grid-cols-4 gap-2">
           {list.map((e) => (
-            <Button key={e.ep_num} onClick={() => onPick(e.ep_num)}
+            <Button key={e.ep_num} aria-current={e.ep_num === current ? "true" : undefined} onClick={() => onPick(e.ep_num)}
               className={`h-10 rounded-(--r-sm) text-[13px] font-semibold pressable ${e.ep_num === current ? "bg-primary text-on-primary" : "bg-s3 text-on/80"}`}>
               {e.ep_num}
             </Button>
@@ -58,17 +58,32 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
   const [items, setItems] = useState<Comment[]>([]);
   const [page, setPage] = useState(0);
   const [pages, setPages] = useState(1);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retryPage, setRetryPage] = useState(1);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const loadSequence = useRef(0);
+  const loadBusy = useRef(false);
+  const sendBusy = useRef(false);
+  const sendSequence = useRef(0);
+  const scope = `${kind}:${videoId}:${ep}`;
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const alive = useRef(true);
 
-  const load = async (p: number) => {
-    setLoading(true);
+  const load = useCallback(async (p: number) => {
+    if (p > 1 && loadBusy.current) return;
+    const token = ++loadSequence.current;
+    loadBusy.current = true;
+    setLoading(true); setError("");
     try {
       const res: CommentPage | null = kind === "post"
         ? await api.postComments(videoId, p, 20)
         : await api.comments(videoId, ep, p, 20);
+      if (!alive.current || token !== loadSequence.current || currentScope.current !== scope) return;
       setItems((prev) => {
         const base = p === 1 ? [] : prev;
         const seen = new Set(base.map((x) => x.id));
@@ -76,29 +91,42 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
       });
       setPage(p);
       setPages(res?.pagination?.pages || 1);
-    } catch {
-      if (p === 1) setItems([]);
+    } catch (e) {
+      if (alive.current && token === loadSequence.current && currentScope.current === scope) {
+        setError((e as Error).message || "加载失败，请重试"); setRetryPage(p);
+      }
     } finally {
-      setLoading(false);
+      if (alive.current && token === loadSequence.current && currentScope.current === scope) {
+        loadBusy.current = false; setLoading(false);
+      }
     }
-  };
+  }, [videoId, ep, kind, scope]);
 
-  useEffect(() => { load(1); /* eslint-disable-next-line */ }, [videoId, ep, kind]);
+  useEffect(() => {
+    alive.current = true;
+    setItems([]); setPage(0); setPages(1); setText(""); setSending(false); sendBusy.current = false;
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    void load(1);
+    return () => { alive.current = false; loadSequence.current++; sendSequence.current++; loadBusy.current = false; };
+  }, [load]);
 
   const send = async () => {
     const t = text.trim();
-    if (!t) return;
+    if (!t || sendBusy.current) return;
     if (!user) { setLoginOpen(true); return; }
+    sendBusy.current = true;
+    const token = ++sendSequence.current;
     setSending(true);
     try {
       await api.commentSend(videoId, ep, t);
+      if (!alive.current || token !== sendSequence.current || currentScope.current !== scope) return;
       setText("");
       toast("评论已提交，审核通过后展示", "ok");
-      load(1);
+      void load(1);
     } catch (e) {
-      toast((e as Error).message || "评论失败", "info");
+      if (alive.current && token === sendSequence.current && currentScope.current === scope) toast((e as Error).message || "评论失败", "info");
     } finally {
-      setSending(false);
+      if (alive.current && token === sendSequence.current && currentScope.current === scope) { sendBusy.current = false; setSending(false); }
     }
   };
 
@@ -106,13 +134,13 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
     <div className="flex flex-col h-full">
       <div className="shrink-0 flex items-center gap-2 px-4 h-12">
         <span className="text-[14px] font-bold text-on">评论</span>
-        <span className="text-[12px] text-mut">{fmt(total)} · 第 {ep} 集</span>
+        <span className="text-[12px] text-mut">{fmt(total)}{kind === "video" ? ` · 第 ${ep} 集` : " 条"}</span>
         <Button onClick={onClose} aria-label="关闭" className="ml-auto w-7 h-7 rounded-full bg-s3 flex items-center justify-center text-mut pressable">
           <IClose size={13} />
         </Button>
       </div>
 
-      <div className="flex-1 scroll-y px-4">
+      <div ref={scrollRef} className="flex-1 min-h-0 scroll-y px-4" aria-busy={loading}>
         {items.length ? items.map((c) => (
           <div key={c.id} className="flex gap-2.5 py-3 border-b border-s3 last:border-0">
             <Avatar size={32} name={c.nickname} hue={(c.user_id * 37) % 360} />
@@ -121,7 +149,7 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
                 <span className="text-[12px] font-semibold text-on/90">{c.nickname}</span>
                 <span className="text-[12px] text-dim">{c.time}</span>
               </div>
-              <p className="text-[14px] text-on/80 mt-1 leading-relaxed whitespace-pre-wrap">{c.text}</p>
+              <p className="text-[14px] text-on/80 mt-1 leading-relaxed whitespace-pre-wrap break-words">{c.text}</p>
               <div className="flex items-center gap-3 mt-1.5 text-[12px] text-dim">
                 <span className="flex items-center gap-1"><IHeart size={11} />{c.like_count || 0}</span>
                 {c.reply_count > 0 && <span>{c.reply_count} 条回复</span>}
@@ -130,12 +158,15 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
           </div>
         )) : loading ? (
           <div className="flex justify-center py-10"><Loader className="w-7 h-7 spinner" /></div>
+        ) : error ? (
+          <Empty icon={<IHeart size={22} />} title="评论加载失败" sub={error} action="重试" onAction={() => void load(1)} />
         ) : (
           <Empty icon={<IHeart size={22} />} title="还没有评论" sub="来抢第一个沙发" />
         )}
         {items.length > 0 && (
           <div className="flex justify-center py-4">
             {loading ? <Loader className="w-5 h-5 spinner" />
+              : error ? <div role="status" className="flex flex-wrap items-center justify-center gap-2 text-[12px] text-mut"><span>评论加载失败：{error}</span><Button className="px-3 text-primary" onClick={() => void load(retryPage)}>重试</Button></div>
               : page < pages ? (
                 <Button onClick={() => load(page + 1)} className="px-4 h-8 rounded-(--r-ctl) bg-s3 text-[12px] text-on/80 pressable">查看更多</Button>
               ) : <span className="text-[12px] text-dim">— 到底啦 —</span>}
@@ -145,12 +176,12 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
 
       <Form className="shrink-0 flex items-center gap-2 px-3 py-2.5 bg-s2/70" onSubmit={(e) => { e.preventDefault(); send(); }}>
         <Avatar size={30} name={user?.nickname || "我"} hue={322} />
-        <Input ref={inputRef} value={text} onChange={(e) => setText(e.target.value)}
+        <Input ref={inputRef} disabled={sending} value={text} onChange={(e) => setText(e.target.value)}
           readOnly={!user} onClick={() => { if (!user) setLoginOpen(true); }}
           onKeyDown={(event) => { if (!user && event.key === "Enter") { event.preventDefault(); setLoginOpen(true); } }}
           placeholder={user ? "说点什么…" : "登录后参与评论"}
           className="flex-1 min-w-0 h-9 rounded-(--r-ctl) bg-s4 px-3.5 text-[14px] text-on placeholder-dim outline-none focus:bg-s3" />
-        <Button type="submit" disabled={!text.trim() || sending}
+        <Button type="submit" aria-label="发送评论" disabled={!text.trim() || sending}
           className={`w-9 h-9 rounded-full flex items-center justify-center pressable ${text.trim() ? "brand-grad glow-neon" : "bg-s3 text-dim"}`}>
           {sending ? <Loader className="w-4 h-4 spinner" /> : <ISendF size={16} />}
         </Button>

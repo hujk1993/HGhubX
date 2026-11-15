@@ -60,7 +60,7 @@ function syncBackground() {
 
 function DialogFrame({ open, onClose, children, kind, width, label, z }: {
   open: boolean; onClose: () => void; children: ReactNode;
-  kind: "modal" | "sheet" | "dock"; width?: number; label: string; z?: string;
+  kind: "modal" | "sheet" | "guide"; width?: number; label: string; z?: string;
 }) {
   const motion = !matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [mounted, setMounted] = useState(open);
@@ -147,7 +147,7 @@ function DialogFrame({ open, onClose, children, kind, width, label, z }: {
             && !event.currentTarget.contains(event.relatedTarget)) autoFocusPrevious.current = event.relatedTarget;
         }}
         aria-hidden={!open || undefined} inert={!open ? true : undefined}>
-        <Button className="ios-overlay-backdrop" aria-label="关闭对话框" onClick={onClose} tabIndex={-1} />
+        {kind !== "guide" && <Button className="ios-overlay-backdrop" aria-label="关闭对话框" onClick={onClose} tabIndex={-1} />}
         <div role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} className="ios-dialog" onKeyDown={event => event.stopPropagation()}
           style={{ "--ios-dialog-width": `${width ?? 440}px` } as CSSProperties}>
           {kind === "sheet" && <div className="ios-sheet-grip" aria-hidden="true" />}
@@ -164,6 +164,8 @@ export function Modal(props: { open: boolean; onClose: () => void; children: Rea
 export function Sheet(props: { open: boolean; onClose: () => void; children: ReactNode; z?: string; label?: string }) {
   return <DialogFrame {...props} kind="sheet" label={props.label ?? "详情面板"} />;
 }
-export function DockPanel(props: { open: boolean; onClose: () => void; children: ReactNode; width?: number; label?: string }) {
-  return <DialogFrame {...props} kind="dock" label={props.label ?? "侧边面板"} width={props.width ?? 380} />;
+
+/** Full-player coach marks retain the shared focus trap, inert background and back handling. */
+export function GuideFrame(props: { open: boolean; onClose: () => void; children: ReactNode; label: string }) {
+  return <DialogFrame {...props} kind="guide" />;
 }

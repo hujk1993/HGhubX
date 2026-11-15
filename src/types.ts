@@ -179,10 +179,23 @@ export type User = {
   desc?: string;
   user_type?: string;
   counts?: Record<string, number>;
-  interactions?: {
-    like_video_ids: number[];
-    favorite_video_ids: number[];
-    follow_user_ids: number[];
-    like_video_episodes: { video_id: number; ep: number }[];
-  };
+  interactions?: AccountInteractions;
+};
+
+export type AccountInteractions = {
+  like_video_ids?: number[];
+  favorite_video_ids?: number[];
+  follow_user_ids?: number[];
+  like_video_episodes?: { video_id: number; ep: number }[];
+  like_post_ids?: number[];
+  favorite_post_ids?: number[];
+};
+export type AccountSnapshot = { user: User; interactions?: AccountInteractions; origin: string };
+export type AccountIdentity = { expectedUserId: number; expectedOrigin: string };
+export type AccountHistoryItem = {
+  id: number; video_id: number; target_type: "video"; last_ep: number; updated_at: string;
+};
+export type AccountHistoryPage = {
+  items: AccountHistoryItem[];
+  pagination: { page: number; pages: number; size: number; total: number };
 };

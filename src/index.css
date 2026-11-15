@@ -1,4 +1,7 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+/* Only shipping UI contributes utilities, not tests, reports or old artifacts. */
+@source "./";
+@source "../index.html";
 @import "./styles/ios.css";
 
 /* ===================================================================
@@ -44,7 +47,11 @@ body {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-input, textarea { user-select: text; -webkit-user-select: text; }
+input, textarea, [contenteditable="true"], .select-text, .article-body {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
 img, video { -webkit-user-drag: none; }
 button { cursor: pointer; font-family: inherit; }
 
@@ -63,7 +70,6 @@ button { cursor: pointer; font-family: inherit; }
 .elev-1 { box-shadow: 0 1px 2px rgba(0,0,0,.16), 0 4px 12px rgba(0,0,0,.1); }
 .elev-2 { box-shadow: 0 2px 6px rgba(0,0,0,.16), 0 10px 24px rgba(0,0,0,.12); }
 .elev-3 { box-shadow: 0 8px 28px rgba(0,0,0,.18); }
-.elev-up { box-shadow: 0 -4px 16px rgba(0,0,0,.12); }
 html.theme-light .elev-1 { box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04); }
 html.theme-light .elev-2 { box-shadow: 0 2px 8px rgba(0,0,0,.07); }
 html.theme-light .elev-3 { box-shadow: 0 10px 30px rgba(0,0,0,.1); }
@@ -75,7 +81,7 @@ html.theme-light input[type="range"].hg-range::-webkit-slider-thumb {
   background: var(--p-s1);
   box-shadow: 0 0 0 1px rgba(43,40,36,.12), 0 0 10px var(--p-glow);
 }
-.glow-neon, .glow-cyan { box-shadow: 0 4px 18px var(--p-glow); }
+.glow-neon { box-shadow: 0 4px 18px var(--p-glow); }
 .tsh { text-shadow: 0 1px 10px rgba(0,0,0,.6); }
 .pressable { transition: transform .16s cubic-bezier(.2,0,0,1), opacity .16s, background-color .16s, color .16s; }
 .pressable:active { transform: scale(.94); }
@@ -85,7 +91,6 @@ html.theme-light input[type="range"].hg-range::-webkit-slider-thumb {
 .clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
 .brand-grad { background: var(--p-primary); color: var(--p-on-primary); }
-.brand-text { color: var(--p-primary); }
 .tonal { background: var(--p-sec); color: var(--p-on-sec); }
 
 /* ——— 动画 ——— */
@@ -95,28 +100,15 @@ html.theme-light input[type="range"].hg-range::-webkit-slider-thumb {
 .a-fade { animation: kf-fade .2s ease both; }
 @keyframes kf-rise { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
 .a-rise { animation: kf-rise .38s cubic-bezier(.2,0,0,1) both; }
-@keyframes kf-sheet { from{transform:translateY(100%)} to{transform:translateY(0)} }
-.a-sheet { animation: kf-sheet .32s cubic-bezier(.2,0,0,1) both; }
-@keyframes kf-sheet-out { from{transform:translateY(0)} to{transform:translateY(100%)} }
-.a-sheet-out { animation: kf-sheet-out .2s cubic-bezier(.3,0,.8,.15) both; }
-@keyframes kf-panel-in { from{transform:translateX(100%)} to{transform:translateX(0)} }
-.a-panel-in { animation: kf-panel-in .28s cubic-bezier(.2,0,0,1) both; }
-@keyframes kf-panel-out { from{transform:translateX(0)} to{transform:translateX(100%)} }
-.a-panel-out { animation: kf-panel-out .2s ease-in both; }
 @keyframes kf-scale-in { from{opacity:0;transform:scale(.92)} to{opacity:1;transform:scale(1)} }
-.a-scale-in { animation: kf-scale-in .22s cubic-bezier(.2,0,0,1) both; }
 @keyframes kf-page-in { from{transform:translateX(100%)} to{transform:none} }
 .a-page-in { animation: kf-page-in .3s cubic-bezier(.2,0,0,1) both; }
 @keyframes kf-page-out { from{transform:translateX(0)} to{transform:translateX(100%)} }
 .a-page-out { animation: kf-page-out .22s cubic-bezier(.3,0,.8,.15) both; }
-@keyframes kf-shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
 .shimmer { background: linear-gradient(110deg, var(--p-s1) 0%, var(--p-s3) 50%, var(--p-s1) 100%); }
 @keyframes kf-spin { to{transform:rotate(360deg)} }
-.a-spin-slow { animation: kf-spin 6s linear infinite; }
 @keyframes kf-toast { from{opacity:0;transform:translateY(12px) scale(.96)} to{opacity:1;transform:translateY(0) scale(1)} }
 .a-toast { animation: kf-toast .26s cubic-bezier(.2,0,0,1) both; }
-@keyframes kf-kenburns { 0%{transform:scale(1.02) translateY(0)} 50%{transform:scale(1.12) translateY(-2%)} 100%{transform:scale(1.02) translateY(0)} }
-.a-kenburns { animation: kf-kenburns 18s ease-in-out infinite; }
 .spinner { border: 3px solid rgba(255,255,255,.18); border-top-color: var(--p-primary); border-radius: 999px; animation: kf-spin .8s linear infinite; }
 
 /* ——— 进度滑杆 ——— */

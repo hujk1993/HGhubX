@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { tracePlayback } from "./playbackDiagnostics";
 import type {
-  CommentPage, Detail, HotSearchVideo, Paged, PlayInfo, Post, PostCategory, RankItem, TagGroup, TopicCard, TopicDetail, User, UserProfile, VideoCard,
+  AccountHistoryPage, AccountIdentity, AccountSnapshot, CommentPage, Detail, HotSearchVideo, Paged, PlayInfo, Post, PostCategory, RankItem, TagGroup, TopicCard, TopicDetail, User, UserProfile, VideoCard,
 } from "./types";
 
 /* ── 运行环境 ───────────────────────────────────────────── */
@@ -125,11 +125,14 @@ export const api = {
     }>("app_boot"),
   securitySet: (strict: boolean) => call<boolean>("security_set", { strict }),
   login: (username: string, password: string) =>
-    call<{ user: User }>("api_login", { username, password }),
+    call<AccountSnapshot>("api_login", { username, password }),
   register: (username: string, password: string, email = "") =>
-    call<{ user: User }>("api_register", { username, password, email }),
-  logout: () => call<{ ok: boolean }>("api_logout"),
-  me: () => call<User>("api_me"),
+    call<AccountSnapshot>("api_register", { username, password, email }),
+  logout: (identity?: AccountIdentity) => call<{ ok: boolean }>("api_logout", identity ? { expectedUserId: identity.expectedUserId, expectedOrigin: identity.expectedOrigin } : {}),
+  me: (identity?: AccountIdentity) => call<AccountSnapshot>("api_me", identity ? { expectedUserId: identity.expectedUserId, expectedOrigin: identity.expectedOrigin } : {}),
+  accountHistory: (identity: AccountIdentity, page = 1, size = 50) => call<AccountHistoryPage>("api_account_history", { expectedUserId: identity.expectedUserId, expectedOrigin: identity.expectedOrigin, page, size }),
+  accountHistoryRecord: (identity: AccountIdentity, videoId: number, ep: number) => call<unknown>("api_account_history_record", { expectedUserId: identity.expectedUserId, expectedOrigin: identity.expectedOrigin, videoId, ep }),
+  accountHistoryDelete: (identity: AccountIdentity, ids: number[]) => call<unknown>("api_account_history_delete", { expectedUserId: identity.expectedUserId, expectedOrigin: identity.expectedOrigin, ids }),
 
   feed: (page = 1, size = 20) => call<Paged<VideoCard>>("api_feed", { page, size }),
   topics: () => call<{ items: TopicCard[] }>("api_topics"),
@@ -170,8 +173,8 @@ export const api = {
 
   clearCache: () => invoke<void>("cache_clear"),
   netDiag: () => invoke<Record<string, unknown>>("net_diag"),
-  postLike: (id: number, on: boolean) => invoke<unknown>("api_post_like", { id, on }),
-  postCollect: (id: number, on: boolean) => invoke<unknown>("api_post_collect", { id, on }),
+  postLike: (id: number, on: boolean, identity?: AccountIdentity) => invoke<unknown>("api_post_like", { id, on, expectedUserId: identity?.expectedUserId, expectedOrigin: identity?.expectedOrigin }),
+  postCollect: (id: number, on: boolean, identity?: AccountIdentity) => invoke<unknown>("api_post_collect", { id, on, expectedUserId: identity?.expectedUserId, expectedOrigin: identity?.expectedOrigin }),
   postComments: (id: number, page: number, size: number) => call<CommentPage>("api_post_comments", { id, page, size }),
   postCategories: () => call<{ items: PostCategory[] }>("api_post_categories"),
   postCategory: (route: string, page = 1, size = 20, sort?: string) =>
@@ -181,9 +184,9 @@ export const api = {
   user: (id: number) => call<UserProfile>("api_user", { id }),
   userStats: (id: number) => call<{ user_id: number; like_count: number; following: number; followers: number; video_count: number; post_count: number }>("api_user_stats", { id }),
   userVideos: (id: number, page = 1, size = 20) => call<Paged<VideoCard>>("api_user_videos", { id, page, size }),
-  like: (id: number, ep: number, on: boolean) => call<unknown>("api_like", { id, ep, on }),
-  collect: (id: number, on: boolean) => call<unknown>("api_collect", { id, on }),
-  follow: (uid: number, on: boolean) => call<unknown>("api_follow", { uid, on }),
+  like: (id: number, ep: number, on: boolean, identity?: AccountIdentity) => call<unknown>("api_like", { id, ep, on, expectedUserId: identity?.expectedUserId, expectedOrigin: identity?.expectedOrigin }),
+  collect: (id: number, on: boolean, identity?: AccountIdentity) => call<unknown>("api_collect", { id, on, expectedUserId: identity?.expectedUserId, expectedOrigin: identity?.expectedOrigin }),
+  follow: (uid: number, on: boolean, identity?: AccountIdentity) => call<unknown>("api_follow", { uid, on, expectedUserId: identity?.expectedUserId, expectedOrigin: identity?.expectedOrigin }),
 
   /* 线路（数据源）：固定线路写死在 Rust 侧，镜像线路从地址发布页拉、推荐镜像从发布入口页拉 */
   lineState: () => call<LineState>("line_state"),

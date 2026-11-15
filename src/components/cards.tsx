@@ -3,6 +3,7 @@ import type { VideoCard } from "../types";
 import { IHeartF, IPlayF, IStarF } from "../icons";
 import { Img } from "./ui";
 import { Button } from "./ios/controls";
+import { FilteredContent } from "./FilteredContent";
 
 function ScoreBadge({ score }: { score: number }) {
   return Number.isFinite(score) && score > 0 ? <span className="ios-score-badge" aria-label={`评分 ${score.toFixed(1)}`}>
@@ -10,9 +11,18 @@ function ScoreBadge({ score }: { score: number }) {
   </span> : null;
 }
 
-export function MediaCard({ title, cover, subtitle, badge, progress, score, priority = false, onOpen }: {
-  title: string; cover: string; subtitle?: string; badge?: string; progress?: string; score?: number; priority?: boolean; onOpen: () => void;
+export function MediaCard({ title, cover, subtitle, badge, progress, score, priority = false, onOpen, blockedReason }: {
+  title: string; cover: string; subtitle?: string; badge?: string; progress?: string; score?: number; priority?: boolean; onOpen: () => void; blockedReason?: string | null;
 }) {
+  if (blockedReason) return <Button onClick={onOpen} className="ios-poster" aria-label="该内容命中屏蔽标签，查看提示">
+    <span className="ios-poster-art flex flex-col items-center justify-center gap-3 px-3 text-center text-mut">
+      <span className="text-[14px] font-semibold">该内容命中屏蔽标签</span>
+      <span className="text-[12px] break-words">{blockedReason}</span>
+      <span className="text-[13px] text-primary">查看提示</span>
+    </span>
+    <span className="ios-poster-title">已屏蔽内容</span>
+    {progress && <span className="ios-poster-subtitle">{progress}</span>}
+  </Button>;
   return <Button onClick={onOpen} className="ios-poster" aria-label={title}>
     <span className={`ios-poster-art ${badge ? "has-poster-badge" : ""}`}>
       <Img src={cover} alt="" eager={priority} />
@@ -33,12 +43,12 @@ export function WaterfallCard({ v, onOpen, priority = false }: { v: VideoCard; o
     progress={`${fmt(v.hot)} 次播放`} />;
 }
 
-export function Masonry({ videos, onOpen, wide = false }: {
-  videos: VideoCard[]; onOpen: (v: VideoCard) => void; wide?: boolean; gap?: string;
+export function Masonry({ videos, onOpen, wide = false, scopeKey }: {
+  videos: VideoCard[]; onOpen: (v: VideoCard) => void; wide?: boolean; gap?: string; scopeKey?: string | number;
 }) {
-  return <div className={`ios-media-grid ${wide ? "is-wide" : ""}`} data-ui="media-grid">
-    {videos.map((v, index) => <WaterfallCard key={v.id} v={v} priority={index < 2} onOpen={() => onOpen(v)} />)}
-  </div>;
+  return <FilteredContent items={videos} scopeKey={scopeKey}>{visible => <div className={`ios-media-grid ${wide ? "is-wide" : ""}`} data-ui="media-grid">
+    {visible.map((v, index) => <WaterfallCard key={v.id} v={v} priority={index < 2} onOpen={() => onOpen(v)} />)}
+  </div>}</FilteredContent>;
 }
 
 export function RowCard({ v, onOpen }: { v: VideoCard; onOpen: () => void }) {

@@ -49,11 +49,21 @@ fn serve(mut stream: TcpStream) -> std::io::Result<()> {
     if reader.read_line(&mut request_line)? == 0 {
         return Ok(());
     }
-    // 请求头整体丢弃：每个分片都是整包返回，不需要处理 Range。
+    let mut range = None;
+    let mut range_count = 0;
+    let mut if_range = false;
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 || line.trim_end().is_empty() {
             break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("Range") {
+                range_count += 1;
+                range = Some(value.trim().to_owned());
+            } else if name.eq_ignore_ascii_case("If-Range") {
+                if_range = true;
+            }
         }
     }
 
@@ -69,7 +79,12 @@ fn serve(mut stream: TcpStream) -> std::io::Result<()> {
         None => (target, ""),
     };
 
-    let response = tauri::async_runtime::block_on(crate::media::handle(path, query, ORIGIN));
+    let range = if method == "GET" && range_count == 1 && !if_range {
+        range.as_deref()
+    } else {
+        None
+    };
+    let response = tauri::async_runtime::block_on(crate::media::handle(path, query, ORIGIN, range));
     let (parts, body) = response.into_parts();
 
     write_response(&mut stream, method, parts, &body)

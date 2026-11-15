@@ -1,25 +1,41 @@
-import { LiquidIndicator } from "./components/ios/effects";
+import { LiquidIndicator, Loader } from "./components/ios/effects";
 import { Button } from "./components/ios/controls";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore, type Page, type Tab } from "./store";
 import { isMobile, selfTest } from "./api";
 import { addPluginListener, invoke } from "@tauri-apps/api/core";
 import { runBack } from "./back";
 import Home from "./pages/Home";
-import Search, { RankPage } from "./pages/Search";
-import Category, { ChannelPage } from "./pages/Category";
-import Profile from "./pages/Profile";
-import SettingsPage from "./pages/Settings";
 import Feed from "./components/Feed";
-import { PostsPage, PostDetail } from "./pages/Posts";
-import { TopicsPage, TopicPage, TagsPage, TagPage } from "./pages/Discover";
-import { FollowingPage, UserPage } from "./pages/User";
 import LoginModal from "./components/LoginModal";
 import { ToastHost } from "./components/ui";
 import { DesktopRail, DesktopTitleBar } from "./components/DesktopChrome";
 import ResizeHandles from "./components/ResizeHandles";
 import { tracePlayback } from "./playbackDiagnostics";
-import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF, Logo } from "./icons";
+import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF } from "./icons";
+
+// Local chunks load on first visit; visited tabs stay mounted as before.
+const Search = lazy(() => import("./pages/Search"));
+const RankPage = lazy(() => import("./pages/Search").then(module => ({ default: module.RankPage })));
+const Category = lazy(() => import("./pages/Category"));
+const ChannelPage = lazy(() => import("./pages/Category").then(module => ({ default: module.ChannelPage })));
+const Profile = lazy(() => import("./pages/Profile"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
+const PostsPage = lazy(() => import("./pages/Posts").then(module => ({ default: module.PostsPage })));
+const PostDetail = lazy(() => import("./pages/Posts").then(module => ({ default: module.PostDetail })));
+const TopicsPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TopicsPage })));
+const TopicPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TopicPage })));
+const TagsPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TagsPage })));
+const TagPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TagPage })));
+const FollowingPage = lazy(() => import("./pages/User").then(module => ({ default: module.FollowingPage })));
+const UserPage = lazy(() => import("./pages/User").then(module => ({ default: module.UserPage })));
+
+function PageLoading() {
+  return <div className="absolute inset-0 grid place-items-center bg-bg"><Loader label="页面加载中" /></div>;
+}
+
+const SELECTABLE_TEXT = 'input, textarea, [contenteditable="true"], .select-text, .article-body';
+const isSelectableText = (target: EventTarget | null) => target instanceof Element && !!target.closest(SELECTABLE_TEXT);
 
 function TabBar() {
   const { tab, setTab, platform } = useStore();
@@ -48,7 +64,11 @@ function TabBar() {
 }
 
 /* ============ 堆栈页面 ============ */
-function StackPage({ page, onBack, wide, top, bottomInset }: {
+function StackPage(props: Parameters<typeof StackPageContent>[0]) {
+  return <Suspense fallback={<PageLoading />}><StackPageContent {...props} /></Suspense>;
+}
+
+function StackPageContent({ page, onBack, wide, top, bottomInset }: {
   page: Page; onBack: () => void; wide: boolean; top: boolean; bottomInset: number;
 }) {
   if (page.kind === "feed") {
@@ -60,7 +80,7 @@ function StackPage({ page, onBack, wide, top, bottomInset }: {
   }
   if (page.kind === "channel") return <ChannelPage cate={page.cate} name={page.name} onBack={onBack} wide={wide} />;
   if (page.kind === "ranks") return <RankPage onBack={onBack} wide={wide} />;
-  if (page.kind === "settings") return <SettingsPage onBack={onBack} wide={wide} />;
+  if (page.kind === "settings") return <SettingsPage onBack={onBack} wide={wide} initialSection={page.section} />;
   if (page.kind === "posts") return <PostsPage onBack={onBack} wide={wide} />;
   if (page.kind === "post") return <PostDetail id={page.id} onBack={onBack} active={top} />;
   if (page.kind === "topics") return <TopicsPage onBack={onBack} wide={wide} />;
@@ -73,6 +93,23 @@ function StackPage({ page, onBack, wide, top, bottomInset }: {
 }
 
 /* ============ 应用主体 ============ */
+function MainTabs({ wide, pageActive, bottomInset }: { wide: boolean; pageActive: boolean; bottomInset: number }) {
+  const { tab } = useStore();
+  const [visited, setVisited] = useState<ReadonlySet<Tab>>(() => new Set());
+  useEffect(() => {
+    if (pageActive) setVisited(previous => previous.has(tab) ? previous : new Set([...previous, tab]));
+  }, [tab, pageActive]);
+  const mounted = (key: Tab) => visited.has(key) || (pageActive && tab === key);
+  const visible = (key: Tab) => tab === key ? `absolute inset-0 ${key === "home" ? "" : "ios-tab-active"}` : "absolute inset-0 hidden pointer-events-none";
+  // First visits mount on demand; subsequent switches preserve queries, scroll and playback state.
+  return <>
+    <div className={visible("home")} inert={!pageActive || tab !== "home"} aria-hidden={!pageActive || tab !== "home"}>{mounted("home") && <Home active={pageActive && tab === "home"} bottomInset={bottomInset} />}</div>
+    <div className={visible("search")} inert={!pageActive || tab !== "search"} aria-hidden={!pageActive || tab !== "search"}>{mounted("search") && <Suspense fallback={<PageLoading />}><Search active={pageActive && tab === "search"} wide={wide} /></Suspense>}</div>
+    <div className={visible("category")} inert={!pageActive || tab !== "category"} aria-hidden={!pageActive || tab !== "category"}>{mounted("category") && <Suspense fallback={<PageLoading />}><Category wide={wide} active={pageActive && tab === "category"} /></Suspense>}</div>
+    <div className={visible("profile")} inert={!pageActive || tab !== "profile"} aria-hidden={!pageActive || tab !== "profile"}>{mounted("profile") && <Suspense fallback={<PageLoading />}><Profile wide={wide} /></Suspense>}</div>
+  </>;
+}
+
 function AppBody() {
   const { platform, tab, setTab, stack, pop, loginOpen, setLoginOpen, fs, clean } = useStore();
   const mainRef = useRef<HTMLDivElement>(null);
@@ -107,7 +144,6 @@ function AppBody() {
     return () => window.removeEventListener("keydown", fn);
   }, [stack.length, pop, setTab, loginOpen, setLoginOpen]);
 
-  const vis = (k: Tab) => (tab === k ? `absolute inset-0 ${k === "home" ? "" : "ios-tab-active"}` : "absolute inset-0 hidden pointer-events-none");
   const pageActive = stack.length === 0 && !loginOpen;
   const bottomInset = isMobile ? (fs || clean ? 0 : 74) : 14;
   /* 栈页（从搜索/分类/我的进入的播放页、图文页）没有底栏，
@@ -119,10 +155,7 @@ function AppBody() {
     <div className={`absolute inset-0 flex bg-canvas plat-${platform}`}>
       {!isMobile && <DesktopRail collapsed={collapsed} />}
       <div ref={mainRef} className="relative flex-1 min-w-0 overflow-hidden win-main">
-        <div className={vis("home")} inert={!pageActive || tab !== "home"} aria-hidden={!pageActive || tab !== "home"}><Home active={pageActive && tab === "home"} bottomInset={bottomInset} /></div>
-        <div className={vis("search")} inert={!pageActive || tab !== "search"} aria-hidden={!pageActive || tab !== "search"}><Search active={pageActive && tab === "search"} wide={wide} /></div>
-        <div className={vis("category")} inert={!pageActive || tab !== "category"} aria-hidden={!pageActive || tab !== "category"}><Category wide={wide} active={pageActive && tab === "category"} /></div>
-        <div className={vis("profile")} inert={!pageActive || tab !== "profile"} aria-hidden={!pageActive || tab !== "profile"}><Profile wide={wide} /></div>
+        <MainTabs wide={wide} pageActive={pageActive} bottomInset={bottomInset} />
 
         {stack.map((p, i) => (
           <div key={p.key} inert={i !== stack.length - 1 || loginOpen} aria-hidden={i !== stack.length - 1 || loginOpen} className="absolute inset-0 z-30 bg-bg a-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
@@ -190,17 +223,13 @@ function ShellInner({ collapsed, theater }: { collapsed: boolean; theater: boole
     return () => window.removeEventListener("keydown", fn);
   }, [stack.length, pop, setTab, loginOpen, setLoginOpen]);
 
-  const vis = (k: Tab) => (tab === k ? `absolute inset-0 ${k === "home" ? "" : "ios-tab-active"}` : "absolute inset-0 hidden pointer-events-none");
   const pageActive = stack.length === 0 && !loginOpen;
 
   return (
     <div className={`absolute inset-0 flex bg-canvas plat-${platform}`}>
       {!theater && <DesktopRail collapsed={collapsed} />}
       <div ref={mainRef} className={`relative flex-1 min-w-0 overflow-hidden win-main ${theater ? "is-theater-main" : ""}`}>
-        <div className={vis("home")} inert={!pageActive || tab !== "home"} aria-hidden={!pageActive || tab !== "home"}><Home active={pageActive && tab === "home"} bottomInset={14} /></div>
-        <div className={vis("search")} inert={!pageActive || tab !== "search"} aria-hidden={!pageActive || tab !== "search"}><Search active={pageActive && tab === "search"} wide={wide} /></div>
-        <div className={vis("category")} inert={!pageActive || tab !== "category"} aria-hidden={!pageActive || tab !== "category"}><Category wide={wide} active={pageActive && tab === "category"} /></div>
-        <div className={vis("profile")} inert={!pageActive || tab !== "profile"} aria-hidden={!pageActive || tab !== "profile"}><Profile wide={wide} /></div>
+        <MainTabs wide={wide} pageActive={pageActive} bottomInset={14} />
         {stack.map((p, i) => (
           <div key={p.key} inert={i !== stack.length - 1 || loginOpen} aria-hidden={i !== stack.length - 1 || loginOpen} className="absolute inset-0 z-30 bg-bg win-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
             <StackPage page={p} onBack={pop} wide={wide} top={i === stack.length - 1} bottomInset={14} />
@@ -231,27 +260,30 @@ export default function App() {
     tracePlayback("navigation.change", { tab, stack: stack.map(p => ({ page: p.kind, key: p.key })), login_open: loginOpen });
   }, [tab, stack, loginOpen]);
 
-  /* iOS：长按快进会触发 WKWebView 系统文本选择放大镜（loupe），纯 CSS 挡不住。
-     原生层已默认关闭文本交互（isTextInteractionEnabled=false）；这里在用户触碰输入框时
-     重新打开、失焦时再关闭，避免影响搜索/评论/登录等文本输入。 */
+  /* iOS keeps player gestures free of selection handles while inputs and reading text
+     retain native selection/copy. Pointer targeting also handles non-focusable articles. */
   useEffect(() => {
     if (platform !== "ios") return;
-    const setTI = (enabled: boolean) => invoke("set_text_interaction", { enabled }).catch(() => {});
-    const INPUTS = 'input, textarea, [contenteditable="true"]';
-    const onDown = (e: Event) => {
-      const t = e.target as HTMLElement | null;
-      if (t && typeof t.closest === "function" && t.closest(INPUTS)) setTI(true);
+    let last: boolean | null = null;
+    const setTI = (enabled: boolean) => {
+      if (last === enabled) return;
+      last = enabled;
+      invoke("set_text_interaction", { enabled }).catch(() => { last = null; });
     };
+    const onDown = (e: Event) => setTI(isSelectableText(e.target));
     const onFocusOut = (e: FocusEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && typeof t.closest === "function" && t.closest(INPUTS)) setTI(false);
+      // A touch on an article can blur an input with relatedTarget=null after pointerdown.
+      // Keep that pointer decision; the next control interaction explicitly disables selection.
+      if (e.relatedTarget) setTI(isSelectableText(e.relatedTarget));
     };
     document.addEventListener("touchstart", onDown, { capture: true, passive: true });
     document.addEventListener("pointerdown", onDown, { capture: true, passive: true });
+    document.addEventListener("focusin", onDown, true);
     document.addEventListener("focusout", onFocusOut, true);
     return () => {
       document.removeEventListener("touchstart", onDown, true);
       document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("focusin", onDown, true);
       document.removeEventListener("focusout", onFocusOut, true);
     };
   }, [platform]);
@@ -284,7 +316,7 @@ export default function App() {
   }, [platform]);
 
   useEffect(() => {
-    const prevent = (e: Event) => e.preventDefault();
+    const prevent = (e: Event) => { if (!isSelectableText(e.target)) e.preventDefault(); };
     document.addEventListener("contextmenu", prevent);
     return () => document.removeEventListener("contextmenu", prevent);
   }, []);
@@ -302,8 +334,6 @@ export default function App() {
       {isMobile ? <MobileShell /> : <DesktopShell />}
       <LoginModal />
       <ToastHost />
-      {/* 登录遮罩键盘处理占位 */}
-      {loginOpen && <div className="hidden" onClick={() => setLoginOpen(false)} />}
     </>
   );
 }
