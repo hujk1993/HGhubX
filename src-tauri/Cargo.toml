@@ -1,6 +1,6 @@
 [package]
 name = "hghubx"
-version = "2.1.0"
+version = "2.1.2"
 description = "HGhubX client"
 authors = ["HGhubX"]
 license = "PolyForm-Noncommercial-1.0.0"
@@ -40,7 +40,7 @@ reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "charset",
 ] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
 aes = "0.8"
 base64 = "0.22"
 percent-encoding = "2"
@@ -58,6 +58,7 @@ webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
 hyper-util = { version = "0.1.21", features = ["client-proxy", "client-proxy-system"] }
 
 [dev-dependencies]
+getrandom = "=0.3.4"
 hyper-util = { version = "0.1.21", features = ["client-proxy", "client-proxy-system"] }
 
 # macOS 红绿灯垂直居中需要读取 AppKit 按钮尺寸（见 src/macos_titlebar.rs）。
@@ -76,6 +77,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
+getrandom = "=0.3.4"
 objc2 = "0.6"
 objc2-ui-kit = { version = "0.3", default-features = false, features = [
   "std",

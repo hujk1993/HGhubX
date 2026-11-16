@@ -30,6 +30,15 @@ const fixture = {
   rejectLoggingSave: false,
   pauseBuffering: () => testHls?.pauseBuffering(),
   resumeBuffering: () => testHls?.resumeBuffering(),
+  suppressMediaRecovery: false,
+  mediaRecoveryCalls: 0,
+  stopForMediaFailure: () => { fixture.suppressMediaRecovery = true; testHls?.stopLoad(); },
+  failMedia: () => testHls?.trigger(Hls.Events.ERROR, {
+    type: Hls.ErrorTypes.MEDIA_ERROR,
+    details: Hls.ErrorDetails.BUFFER_APPEND_ERROR,
+    fatal: true,
+    error: new Error("fixture media failure"),
+  }),
   engineState: () => ({ loading: testHls?.loadingEnabled, buffering: testHls?.bufferingEnabled, levels: testHls?.levels.length }),
 };
 let testHls: Hls | undefined;
@@ -40,6 +49,17 @@ if (diagnosticTest) {
   // Test-only handle: exercise the real engine's public API without rewriting production modules.
   const attach = Hls.prototype.attachMedia;
   Hls.prototype.attachMedia = function (...args) { testHls = this; return attach.apply(this, args); };
+  // Simulate a persistent decoder failure without detaching MSE or allowing
+  // fresh buffers to reset the application's bounded recovery budget.
+  const recoverMediaError = Hls.prototype.recoverMediaError;
+  Hls.prototype.recoverMediaError = function () {
+    fixture.mediaRecoveryCalls += 1;
+    if (!fixture.suppressMediaRecovery) recoverMediaError.call(this);
+  };
+  const startLoad = Hls.prototype.startLoad;
+  Hls.prototype.startLoad = function (...args) {
+    if (!fixture.suppressMediaRecovery) startLoad.apply(this, args);
+  };
   let enabled = false;
   playbackLogApi.status = async () => ({ enabled, path: "playback.log", error: null });
   playbackLogApi.set = async (on) => {

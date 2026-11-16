@@ -16,6 +16,15 @@ rm -f "$ADDR_FILE"
 # before either build starts. The later beforeBuildCommand repeats this idempotently.
 node scripts/generate-ios-icons.mjs
 node scripts/sync-ios-icons.mjs --required
+# 启动屏背景色与 launch.css 对齐，消除原生启动屏 -> WebView 的闪烁
+node scripts/patch-ios-splash.mjs
+# 把 UILaunchScreen 指向刚生成的 LaunchBackground 颜色（iOS 14+ 纯色启动屏）
+for plist in $(find src-tauri/gen/apple -name "Info.plist" 2>/dev/null); do
+  /usr/libexec/PlistBuddy -c "Delete :UILaunchStoryboardName" "$plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Delete :UILaunchScreen" "$plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :UILaunchScreen dict" "$plist"
+  /usr/libexec/PlistBuddy -c "Add :UILaunchScreen:UIColorName string LaunchBackground" "$plist"
+done
 
 # Tauri 没有 ios --no-sign。让它的 release options server 一直活着，
 # 否则 Xcode 的 Build Rust Code 阶段连不上它会直接 panic。

@@ -3,7 +3,7 @@ import { api, platform as envPlatform } from "./api";
 import { isStrictSecurity, setStrictSecurity as setHtmlStrictSecurity } from "./html";
 import type { User } from "./types";
 import { readStorage, STORAGE_KEYS } from "./storage";
-import { useAccountData } from "./accountData";
+import { pickGuestData, useAccountData, type GuestData } from "./accountData";
 
 export type Platform = "android" | "ios" | "windows" | "macos" | "linux";
 export type Theme = "dark" | "light";
@@ -63,11 +63,7 @@ export type Toast = {
 /** 观看记录：看到第几集、第几秒（`dur` 用来判断是否已看完） */
 export type WatchProgress = { id: number; ep: number; t: number; dur: number; at: number };
 
-type Persist = {
-  likes: number[];
-  favs: number[];
-  history: WatchProgress[];
-  follows: number[];
+type Persist = GuestData & {
   muted: boolean;
   muteOnStartup: boolean;
   volume: number;
@@ -164,7 +160,7 @@ type Store = {
   tab: Tab; setTab: (t: Tab) => void;
   stack: Page[]; push: (p: PageInput) => void; pop: () => void;
   user: User | null; setUser: (u: User | null, origin?: string) => void;
-  accountScope: string; accountSync: { busy: boolean; error: string; lastSynced: number };
+  accountScope: string; accountSync: { busy: boolean; error: string; lastSynced: number; favoritesKnown: boolean };
   syncAccount: () => Promise<void>;
   setCollected: (kind: "video" | "post", id: number, on: boolean) => Promise<void>;
   setLiked: (kind: "video" | "post", id: number, ep: number, on: boolean) => Promise<void>;
@@ -207,7 +203,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const themeRef = useRef(theme);
   const [tab, setTabRaw] = useState<Tab>("home");
   const [stack, setStack] = useState<Page[]>([]);
-  const account = useAccountData(p, data => setP(previous => ({ ...previous, ...data })));
+  // Guest library writes must not roll back sound, quality, gestures or search preferences.
+  const account = useAccountData(
+    pickGuestData(p),
+    data => setP(previous => ({ ...previous, ...pickGuestData(data) })),
+  );
   const { user, setUser } = account;
   const accountRef = useRef(account); accountRef.current = account;
   const [loginOpen, setLoginOpen] = useState(false);

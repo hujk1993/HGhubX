@@ -3,6 +3,7 @@ import { Loader } from "./ios/effects";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, fmt, cover as imageCover } from "../api";
 import { handleArticleClick, sanitizeHtml } from "../html";
+import { commentText } from "../commentText";
 import type { Comment, CommentPage, Episode } from "../types";
 import { useStore } from "../store";
 import { copyText } from "../clipboard";
@@ -58,6 +59,7 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
   const [items, setItems] = useState<Comment[]>([]);
   const [page, setPage] = useState(0);
   const [pages, setPages] = useState(1);
+  const [loadedTotal, setLoadedTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retryPage, setRetryPage] = useState(1);
@@ -84,13 +86,16 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
         ? await api.postComments(videoId, p, 20)
         : await api.comments(videoId, ep, p, 20);
       if (!alive.current || token !== loadSequence.current || currentScope.current !== scope) return;
+      const incoming = (res?.items || []).map((x) => ({ ...x, text: commentText(x.text) }));
       setItems((prev) => {
         const base = p === 1 ? [] : prev;
         const seen = new Set(base.map((x) => x.id));
-        return [...base, ...(res?.items || []).filter((x) => !seen.has(x.id))];
+        return [...base, ...incoming.filter((x) => !seen.has(x.id))];
       });
       setPage(p);
       setPages(res?.pagination?.pages || 1);
+      const count = res?.pagination?.total;
+      if (typeof count === "number" && Number.isFinite(count) && count >= 0) setLoadedTotal(count);
     } catch (e) {
       if (alive.current && token === loadSequence.current && currentScope.current === scope) {
         setError((e as Error).message || "加载失败，请重试"); setRetryPage(p);
@@ -104,7 +109,7 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
 
   useEffect(() => {
     alive.current = true;
-    setItems([]); setPage(0); setPages(1); setText(""); setSending(false); sendBusy.current = false;
+    setItems([]); setPage(0); setPages(1); setLoadedTotal(null); setText(""); setSending(false); sendBusy.current = false;
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     void load(1);
     return () => { alive.current = false; loadSequence.current++; sendSequence.current++; loadBusy.current = false; };
@@ -134,7 +139,7 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
     <div className="flex flex-col h-full">
       <div className="shrink-0 flex items-center gap-2 px-4 h-12">
         <span className="text-[14px] font-bold text-on">评论</span>
-        <span className="text-[12px] text-mut">{fmt(total)}{kind === "video" ? ` · 第 ${ep} 集` : " 条"}</span>
+        <span className="text-[12px] text-mut">{fmt(loadedTotal ?? total)}{kind === "video" ? ` · 第 ${ep} 集` : " 条"}</span>
         <Button onClick={onClose} aria-label="关闭" className="ml-auto w-7 h-7 rounded-full bg-s3 flex items-center justify-center text-mut pressable">
           <IClose size={13} />
         </Button>
@@ -145,11 +150,11 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
           <div key={c.id} className="flex gap-2.5 py-3 border-b border-s3 last:border-0">
             <Avatar size={32} name={c.nickname} hue={(c.user_id * 37) % 360} />
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[12px] font-semibold text-on/90">{c.nickname}</span>
-                <span className="text-[12px] text-dim">{c.time}</span>
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                <span className="min-w-0 text-[12px] font-semibold text-on/90 [overflow-wrap:anywhere]">{c.nickname}</span>
+                <span className="shrink-0 text-[12px] text-dim">{c.time}</span>
               </div>
-              <p className="text-[14px] text-on/80 mt-1 leading-relaxed whitespace-pre-wrap break-words">{c.text}</p>
+              <p className="text-[14px] text-on/80 mt-1 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{c.text || "该评论包含不支持的内容"}</p>
               <div className="flex items-center gap-3 mt-1.5 text-[12px] text-dim">
                 <span className="flex items-center gap-1"><IHeart size={11} />{c.like_count || 0}</span>
                 {c.reply_count > 0 && <span>{c.reply_count} 条回复</span>}

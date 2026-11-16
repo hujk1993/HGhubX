@@ -231,6 +231,7 @@ pub async fn line_auto() -> Result<Value, String> {
         && pick.get("reason").and_then(Value::as_str) != Some("all-down")
         && !chosen.is_empty() && chosen != previous {
         let next = crate::net::set_base(&chosen)?;
+        crate::net::refresh_client();
         switched = next != previous;
     }
     Ok(json!({
@@ -258,6 +259,7 @@ pub async fn line_try_main() -> Result<Value, String> {
         let chosen = probe.get("base").and_then(Value::as_str).unwrap_or_default();
         if !chosen.is_empty() && chosen != previous {
             let next = crate::net::set_base(chosen)?;
+            crate::net::refresh_client();
             switched = next != previous;
         }
     }
@@ -779,10 +781,13 @@ pub async fn api_topics(state: State<'_, Api>) -> Result<Value, String> {
 }
 
 /// 专题详情：`/api/topics/{slug}` 返回 data = { topic, videos, related }。
+/// `videos` 是分页对象；专题可能有上百部，不能只读第一页。
 #[tauri::command]
-pub async fn api_topic(state: State<'_, Api>, slug: String) -> Result<Value, String> {
+pub async fn api_topic(state: State<'_, Api>, slug: String, page: u32, size: u32) -> Result<Value, String> {
     let encoded: String = url::form_urlencoded::byte_serialize(slug.as_bytes()).collect();
-    state.get(&format!("/api/topics/{encoded}")).await
+    let page = page.max(1);
+    let size = size.clamp(1, 100);
+    state.get(&format!("/api/topics/{encoded}?page={page}&size={size}")).await
 }
 
 /// 标签分组：`/api/tags` 返回 data.categories[]，每个含 tags[]（name/slug/hot_score）。
@@ -791,7 +796,7 @@ pub async fn api_tags(state: State<'_, Api>) -> Result<Value, String> {
     state.get("/api/tags").await
 }
 
-/// 按标签取视频：后端按中文标签名匹配（网页 /tag/<slug>/ 实际请求 /api/videos/tag/<name>）。
+/// 按标签取短剧：后端按中文标签名匹配；社区标签需使用 api_post_tag。
 #[tauri::command]
 pub async fn api_tag_videos(
     state: State<'_, Api>,
@@ -802,6 +807,22 @@ pub async fn api_tag_videos(
     let encoded: String = url::form_urlencoded::byte_serialize(tag.as_bytes()).collect();
     state
         .get(&format!("/api/videos/tag/{encoded}?page={page}&size={size}"))
+        .await
+}
+
+/// 按标签取吃瓜帖：`/api/posts/tag/{name}` 按标签名称匹配，不接受网页 slug。
+#[tauri::command]
+pub async fn api_post_tag(
+    state: State<'_, Api>,
+    tag: String,
+    page: u32,
+    size: u32,
+) -> Result<Value, String> {
+    let encoded: String = url::form_urlencoded::byte_serialize(tag.as_bytes()).collect();
+    let page = page.max(1);
+    let size = size.clamp(1, 100);
+    state
+        .get(&format!("/api/posts/tag/{encoded}?page={page}&size={size}"))
         .await
 }
 
@@ -1028,9 +1049,11 @@ pub async fn api_follow(state: State<'_, Api>, uid: i64, on: bool, expected_user
 /* ───────────────────────── 本地缓存 ───────────────────────── */
 
 #[tauri::command]
-pub async fn cache_clear() -> Result<(), String> {
+pub async fn cache_clear(
+    webview: tauri::Webview,
+) -> Result<crate::cache::CacheClearReport, String> {
     crate::media::clear_caches();
-    Ok(())
+    crate::cache::clear_web_cache(&webview).await
 }
 
 /* ───────────────────────── 吃瓜帖子互动 ───────────────────────── */

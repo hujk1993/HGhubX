@@ -1658,11 +1658,12 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hghubx"
-version = "2.1.0"
+version = "2.1.2"
 dependencies = [
  "aes",
  "base64 0.22.1",
  "dom_query",
+ "getrandom 0.3.4",
  "hyper-util",
  "objc2",
  "objc2-app-kit",

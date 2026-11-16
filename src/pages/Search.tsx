@@ -8,12 +8,11 @@ import { MediaCard, Masonry, RankRow } from "../components/cards";
 import { FilteredContent } from "../components/FilteredContent";
 import { Empty } from "../components/ui";
 import { useSearchResults } from "../useSearchResults";
+import { SearchTags } from "../components/SearchTags";
 import { IBack, IChevR, IClose, IFireF, IPlayF, IRefresh, ISearch, ITrophy } from "../icons";
 
-const HOT_TAGS = ["都市", "逆袭", "古风", "系统", "后宫", "校园", "仙侠", "职场", "大男主", "御姐", "脑洞", "奇幻"];
-
 export default function Search({ active, wide }: { active: boolean; wide: boolean }) {
-  const { push, searchHist, addSearch, clearSearchHist } = useStore();
+  const { push, searchHist, addSearch, clearSearchHist, lineEpoch, accountScope } = useStore();
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [tab, setTab] = useState<"video" | "post">("video");
@@ -138,25 +137,8 @@ export default function Search({ active, wide }: { active: boolean; wide: boolea
               </div>
             )}
 
-            <Surface className="mt-5 rounded-(--r-md) bg-s2 p-3.5 a-rise">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-[14px] font-semibold text-on/90"><IFireF size={15} className="text-primary" />热门题材</span>
-                <Button onClick={() => push({ kind: "ranks" })} className="text-[12px] text-primary font-semibold pressable">完整榜单 ›</Button>
-              </div>
-              <div className="flex flex-wrap gap-2 mt-3">
-                {HOT_TAGS.map((t) => (
-                  <Button key={t} onClick={() => { setQ(t); submit(t); }}
-                    className="px-3 h-7 rounded-(--r-ctl) bg-s3 text-[13px] text-on/85 pressable">{t}</Button>
-                ))}
-              </div>
-            </Surface>
-
-            <div className="flex items-center justify-between mt-6 mb-2.5">
-              <span className="text-[14px] font-bold text-on">为你推荐</span>
-              <Button onClick={() => submit(HOT_TAGS[Math.floor(Math.random() * HOT_TAGS.length)])}
-                className="flex items-center gap-1 text-[12px] text-mut pressable"><IRefresh size={13} />换一批</Button>
-            </div>
-            <p className="text-[12px] text-dim leading-relaxed">
+            <SearchTags key={JSON.stringify([lineEpoch, accountScope])} active={active} />
+            <p className="mt-3 text-[12px] text-dim leading-relaxed">
               输入关键词后按回车搜索，也可以点上面的题材直接看片单。
             </p>
           </>

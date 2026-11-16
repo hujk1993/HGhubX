@@ -1,13 +1,15 @@
 import { Button, Input } from "./ios/controls";
 import { Loader } from "./ios/effects";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Hls from "hls.js";
-import { fmtTime, platform, playlist } from "../api";
+import { fmtTime, platform } from "../api";
+import { connectNativeMedia, playbackSource } from "../mediaTransport";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
 import { useProxyPlaybackRecovery } from "../useProxyPlaybackRecovery";
+import { createHlsRecovery, type HlsRecovery } from "../hlsRecovery";
 import { useSeekInput } from "../useSeekInput";
 import PlaybackLock from "./PlaybackLock";
 import { useInlinePlayerFullscreen } from "../useInlinePlayerFullscreen";
@@ -35,8 +37,9 @@ export default function Player({
   onTogglePlay, onToggleMute, controls = true, className = "", diagnosticContext = {},
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const latestSource = useRef(src); latestSource.current = src;
   const hlsRef = useRef<Hls | null>(null);
-  const recoverCountRef = useRef(0);
+  const recoveryRef = useRef<HlsRecovery | null>(null);
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { view: "post_detail", ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay: !!autoPlay, src, trace });
   const { slotRef, wrapRef, host, full, fallback, toggleFull } = useInlinePlayerFullscreen({ active, src, videoRef, activity });
@@ -69,14 +72,14 @@ export default function Player({
     if (!video || !src) return;
     setErrMsg("");
     setWaiting(false);
-    recoverCountRef.current = 0;
     const resume = proxyRecovery.resume();
-    const url = playlist(src);
-    trace("source.load", { engine: Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay, resource: mediaResource(src), host: mediaHost(src) });
+    const source = playbackSource(src, Hls.isSupported());
+    let disconnectNative: (() => void) | undefined;
+    trace("source.load", { engine: source.engine, auto_play: autoPlay, resource: mediaResource(src), host: mediaHost(src) });
 
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
-    if (Hls.isSupported()) {
+    if (source.engine === "hls.js") {
       const hls = new Hls({
         // 禁用从插播/内容引导 JSON 派生直连 URL 的可选功能。
         interstitialsController: undefined,
@@ -102,57 +105,50 @@ export default function Player({
         fragLoadingRetryDelay: 400,
       });
       hlsRef.current = hls;
+      const recovery = createHlsRecovery({
+        hls, video, url: source.url,
+        isCurrent: () => hlsRef.current === hls,
+        isActive: activity.isActive,
+        resumePlayback: () => activity.play("media_recovery", true),
+        onFatal: data => {
+          const detail = `${data.type}/${data.details}/${data.response?.code ?? ""}/${String(data.reason ?? "").slice(0, 80)}`;
+          (window as unknown as { __hlsErr?: string }).__hlsErr = detail;
+          setErrMsg(detail); setWaiting(false); setPlaying(false);
+          if (data.type !== Hls.ErrorTypes.NETWORK_ERROR && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.destroy(); hlsRef.current = null;
+          }
+        },
+      });
+      recoveryRef.current = recovery;
       observeHls(hls, trace);
-      hls.loadSource(url);
+      hls.loadSource(source.url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (activity.isActive()) hls.startLoad(resume?.time ?? -1);
         if (autoPlay && !resume) activity.play("manifest_autoplay", true);
       });
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
-        recoverCountRef.current = 0;
+        recovery.buffered();
         setErrMsg("");
       });
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (!data.fatal) {
-          if (
-            data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
-            data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR
-          ) {
-            try { hls.startLoad(video.currentTime || -1); } catch { /* ignore */ }
-          }
-          return;
-        }
-        if (!activity.isActive()) return;
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && recoverCountRef.current < 4) {
-          recoverCountRef.current += 1;
-          try { hls.startLoad(video.currentTime || -1); } catch { /* ignore */ }
-          return;
-        }
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && recoverCountRef.current < 4) {
-          recoverCountRef.current += 1;
-          try { hls.recoverMediaError(); video.play().catch(() => {}); } catch { /* ignore */ }
-          return;
-        }
-        const detail = `${data.type}/${data.details}/${data.response?.code ?? ""}/${String(data.reason ?? "").slice(0, 80)}`;
-        (window as unknown as { __hlsErr?: string }).__hlsErr = detail;
-        setErrMsg(detail);
-        if (!activity.isActive()) return;
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else { hls.destroy(); hlsRef.current = null; }
-      });
+      hls.on(Hls.Events.ERROR, (_e, data) => recovery.error(data));
     } else {
-      // Safari / 部分 WebView 原生支持 HLS
-      video.src = url;
-      if (autoPlay && !resume) activity.play("native_autoplay", true);
+      disconnectNative = connectNativeMedia(video, source, {
+        isCurrent: () => latestSource.current === src && videoRef.current === video,
+        onReady: () => { if (activity.isPlayWanted() && !resume) activity.play("native_autoplay", true); },
+        onError: message => { trace("source.transport_error"); setWaiting(false); setPlaying(false); setErrMsg(message); },
+      });
     }
 
     return () => {
+      disconnectNative?.();
+      recoveryRef.current?.dispose(); recoveryRef.current = null;
       trace("source.cleanup");
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
   }, [src, autoPlay, proxyRecovery.revision]);
+
+  useLayoutEffect(() => { recoveryRef.current?.activityChanged(); }, [active]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -173,6 +169,12 @@ export default function Player({
     trace("toggle.request");
     if (video.paused) activity.play("toggle");
     else activity.pause("toggle");
+  };
+
+  const retry = () => {
+    if (!activity.isActive()) return;
+    setErrMsg(""); setWaiting(true); setPlaying(false);
+    proxyRecovery.retry("manual", true);
   };
 
   const cycleRate = () => {
@@ -216,18 +218,19 @@ export default function Player({
       />
 
       {errMsg && (
-        <div className="absolute left-2 top-2 z-30 max-w-[80%] rounded bg-black/70 px-2 py-1 text-[12px] leading-tight text-red-300 break-all">
-          {errMsg}
+        <div role="alert" className="absolute left-2 top-2 z-30 max-w-[80%] rounded bg-black/70 px-2 py-1 text-[12px] leading-tight text-red-300 break-all">
+          <span>{errMsg}</span>
+          <Button onClick={retry} disabled={!active} className="ml-2 px-2 py-1 text-white">重试</Button>
         </div>
       )}
 
-      {waiting && (
+      {waiting && !errMsg && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <Loader className="w-9 h-9 spinner" />
         </div>
       )}
 
-      {!playing && !waiting && (
+      {!playing && !waiting && !errMsg && (
         <Button onClick={toggle} aria-label="播放"
           className="absolute inset-0 flex items-center justify-center">
           <span className="w-16 h-16 rounded-full bg-black/45 backdrop-blur-sm flex items-center justify-center elev-2 pressable">

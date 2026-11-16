@@ -130,7 +130,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   const playbackClock = useMemo(() => createPlaybackClock(), []);
   const [duration, setDuration] = useState(0);
-  const [vsize, setVsize] = useState({ w: 0, h: 0 });
+  const [vsize, setVsize] = useState({ key: "", w: 0, h: 0 });
   const [paused, setPaused] = useState(false);
   const [controlsLocked, setControlsLocked] = useState(false);
   const [rate, setRate] = useState(1);
@@ -254,6 +254,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const mainUrl = playUrls[playKey] || "";
   const hevcUrl = hevcUrls[playKey] || "";
   const playUrl = preferHevc && hevcUrl ? hevcUrl : mainUrl;
+  const measurementKey = JSON.stringify([accountScope, store.lineEpoch, permissionKey, playKey, playUrl]);
+  const videoSize = vsize.key === measurementKey ? vsize : { key: measurementKey, w: 0, h: 0 };
   // 等播放画面就绪再提示，启动动画/协议、加载失败和其他面板不叠加教程。
   const showHoldGuide = !isDesktop && !holdGuide.seen && active && allowed
     && !!playUrl && duration > 0 && !err && !panel && !tagMenu && !controlsLocked;
@@ -311,7 +313,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         tags: post?.tags || [],
         score: 0,
         like: 0,
-        comment: 0,
+        comment: post?.counts?.comment ?? 0,
         collect: 0,
         episodes: [] as Episode[],
       }
@@ -341,18 +343,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   /* 倍速：中心小方块打开偏好，外侧右上 2.0x / 左下 0.5x。 */
   const effRate = holdSpeed || speedLock ? 2 : holdSlow ? 0.5 : rate;
   /* 沉浸全屏 + 横屏视频 → 舞台旋转 90°，看起来就是横屏 */
-  const rotated = !isDesktop && fs && vsize.w > vsize.h && vsize.h > 0 && !vpLandscape;
-  const landscapeVideo = vsize.w > 0 && vsize.h > 0 && vsize.w > vsize.h;
+  const rotated = !isDesktop && fs && videoSize.w > videoSize.h && videoSize.h > 0 && !vpLandscape;
+  const landscapeVideo = videoSize.w > 0 && videoSize.h > 0 && videoSize.w > videoSize.h;
   /* 竖屏快捷胶囊的显隐：不卸载、只改 opacity，这样淡入淡出都能过渡（#19） */
   const capsuleOn = !fs && !clean && !isDesktop && (landscapeVideo || zoom.s > 1.05);
-  const isLandscapeCurrent = useCallback(() => {
-    if (vsize.w > 0 && vsize.h > 0) return vsize.w > vsize.h;
-    const v = videoRef.current?.el();
-    if (v && v.videoWidth > 0 && v.videoHeight > 0) {
-      return v.videoWidth > v.videoHeight;
-    }
-    return false;
-  }, [vsize.w, vsize.h]);
 
   /* ── 上下划切集 ──────────────────────────────────────────
    * 「上下划切集」开启时，播放区 overlay 的 touch-action 是 none，
@@ -579,7 +573,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     setDuration(0); setErr(""); setWaiting(true); setPaused(false);
     setPlayingKey("");
     playbackClock.publish(0);
-    setVsize({ w: 0, h: 0 });
     setPortraitFit("contain");
   }, [playKey]);
 
@@ -1168,18 +1161,23 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active && !tagMenu && !showHoldGuide} muted={muted}
                   diagnosticContext={{ active: active && !tagMenu && !showHoldGuide, view: mode, kind, video_id: curId, episode: curEp }}
                   volume={volume} rate={effRate}
-                  fit={isDesktop ? "contain" : landscapeVideo ? (fs || vpLandscape ? "contain" : portraitFit) : (vpLandscape ? "contain" : "cover")}
+                  measurementKey={measurementKey}
+                  fit={isDesktop ? "contain" : landscapeVideo ? (fs || vpLandscape ? "contain" : portraitFit) : (!videoSize.w || !videoSize.h || vpLandscape ? "contain" : "cover")}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}
                   onTime={onTimeTick}
                   onDuration={onDurationTick}
-                  onSize={(w, h) => { if (isCurrentPlayback()) setVsize((prev) => (prev.w === w && prev.h === h ? prev : { w, h })); }}
+                  onSize={(w, h, key) => {
+                    if (key !== measurementKey || !isCurrentPlayback()) return false;
+                    setVsize((prev) => (prev.key === key && prev.w === w && prev.h === h ? prev : { key, w, h }));
+                    return true;
+                  }}
                   onPlaying={() => { if (isCurrentPlayback()) { setPaused(false); setWaiting(false); setErr(""); setPlayingKey(playKey); } }}
                   onPause={() => { if (isCurrentPlayback()) setPaused(true); }}
                   onWaiting={() => { if (isCurrentPlayback()) setWaiting(true); }}
                   onEnded={() => { if (!isCurrentPlayback()) return; const next = episodes.find((e) => e.ep_num === curEp + 1); if (next) pickEp(next.ep_num); }}
                   onError={(m) => {
                     if (!isCurrentPlayback()) return;
-                    setErr(m);
+                    setErr(m); setWaiting(false);
                     if (preferHevc && hevcUrl) {
                       setPreferHevc(false);
                       toast("高清播不了，已切回标准", "info");
@@ -1311,11 +1309,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     {collected ? <IStarF size={27} className="hg-gold" /> : <IStar size={27} className="hg-ink hg-ov-shadow" />}
                     <span className="text-[12px] text-white/90 tabular-nums">{fmt(collectCount)}</span>
                   </Button>
-                  <Button onClick={() => setPanel("comments")} className="flex flex-col items-center gap-1 pressable" aria-label="评论">
+                  <Button onClick={() => setPanel("comments")} className="flex flex-col items-center gap-1 pressable" aria-label={`评论 ${fmt(meta.comment)} 条`}>
                     <ICommentF size={26} className="hg-ink hg-ov-shadow" />
-                    <span className="text-[12px] hg-ink-2 hg-ov-shadow">评论</span>
+                    <span className="text-[12px] hg-ink-2 hg-ov-shadow tabular-nums">{fmt(meta.comment)}</span>
                   </Button>
-                  <Button onClick={() => enterFs(isLandscapeCurrent())} className="flex flex-col items-center gap-1 pressable" aria-label="全屏">
+                  <Button onClick={() => enterFs(landscapeVideo)} className="flex flex-col items-center gap-1 pressable" aria-label="全屏">
                     <IExpand size={26} className="hg-ink hg-ov-shadow" />
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow">全屏</span>
                   </Button>
@@ -1348,7 +1346,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                       <span className="text-[12px] text-white/90 tabular-nums">{fmt(likeCount)}</span>
                     </Button>
 
-                    <Button onClick={() => setPanel("comments")} aria-label="评论" className="flex flex-col items-center gap-1 pressable">
+                    <Button onClick={() => setPanel("comments")} aria-label={`评论 ${fmt(meta.comment)} 条`} className="flex flex-col items-center gap-1 pressable">
                       <ICommentF size={27} className="text-white tsh" />
                       <span className="text-[12px] text-white/90 tabular-nums">{fmt(meta.comment)}</span>
                     </Button>
@@ -1478,7 +1476,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   <div className="rounded-xl p-5 flex flex-col items-center gap-3 text-[14px] hg-ink-2 pointer-events-auto" style={{ background: "rgba(0,0,0,.7)" }}>
                     <span>视频暂时无法加载</span>
                     <span className="text-[12px] hg-ink-4 max-w-[240px] text-center break-all">{err}</span>
-                    <Button className="hg-link text-[14px]" onClick={() => { setErr(""); setWaiting(true); videoRef.current?.play(); }}>重试</Button>
+                    <Button className="hg-link text-[14px]" onClick={() => {
+                      setErr(""); setWaiting(true);
+                      if (playUrl && videoRef.current) videoRef.current.retry();
+                      else setProxyRetry(value => value + 1);
+                    }}>重试</Button>
                   </div>
                 </div>
               )}

@@ -35,7 +35,7 @@ function Row({ item, current, probe, busy, disabled, onPick, onProbe }: {
   );
 }
 
-/* 分组头：标题 + 说明 + 右侧动作。三组共用，别再有的按钮在头、有的在尾 */
+/* 分组头：标题 + 说明 + 右侧动作。 */
 function GroupHead({ title, hint, actions }: { title: string; hint: string; actions?: ReactNode }) {
   return (
     <div className="flex items-center gap-2 px-1 mt-4 mb-1.5 first:mt-1">
@@ -50,7 +50,6 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
   const { toast, setUser } = useStore();
   const [state, setState] = useState<LineState | null>(null);
   const [mirrors, setMirrors] = useState<LineItem[] | null>(null);
-  const [recommended, setRecommended] = useState<LineItem[] | null>(null);
   const [mirrorErr, setMirrorErr] = useState("");
   const [loadingMirrors, setLoadingMirrors] = useState(false);
   const [probes, setProbes] = useState<ProbeMap>({});
@@ -86,10 +85,8 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
     try {
       const res = await api.lineMirrors();
       setMirrors(res?.items || []);
-      setRecommended(res?.recommended || []);
     } catch (e) {
       setMirrors([]);
-      setRecommended([]);
       setMirrorErr((e as Error).message || "镜像线路获取失败");
     } finally {
       setLoadingMirrors(false);
@@ -177,6 +174,7 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
   };
 
   const fixed = state?.fixed || [];
+  const mirrorItems = [...(mirrors || [])].sort((a, b) => Number(b.url === state?.base) - Number(a.url === state?.base));
   const busyAll = !!probing || !!switching || !ready;
   const close = () => { if (!applying.current) onClose(); };
 
@@ -231,41 +229,18 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
         </Surface>
 
         <GroupHead
-          title="推荐镜像"
-          hint="来自发布页 · 当前线路置顶"
-          actions={
-            recommended?.length ? (
-              <Button onClick={() => probe(recommended, "recommended")} disabled={busyAll}
-                className="text-[12px] text-primary pressable disabled:opacity-50">
-                {probing === "recommended" ? "检测中…" : `全部检测（${recommended.length}）`}
-              </Button>
-            ) : undefined
-          }
-        />
-        <Surface className="rounded-(--r-md) bg-s2 divide-y divide-s3 overflow-hidden">
-          {loadingMirrors && <div className="flex justify-center py-6"><Loader className="w-6 h-6 spinner" /></div>}
-          {!loadingMirrors && !recommended?.length && (
-            <div className="px-3.5 py-3 text-[12px] text-mut">推荐页里没有可用的镜像地址</div>
-          )}
-          {!loadingMirrors && (recommended || []).map((it) => (
-            <Row key={it.url} item={it} current={state?.base === it.url} probe={probes[it.url]}
-              busy={probing === it.url} disabled={busyAll} onPick={pick} onProbe={(u) => probe([{ url: u }], u)} />
-          ))}
-        </Surface>
-
-        <GroupHead
           title="镜像线路"
-          hint="一般可直连"
+          hint="来自地址发布页"
           actions={
             <>
               <Button onClick={() => { void readMirrors(); }} disabled={loadingMirrors}
                 className="inline-flex items-center gap-1 text-[12px] text-primary pressable disabled:opacity-50">
                 <IRefresh size={12} />{loadingMirrors ? "获取中…" : "刷新"}
               </Button>
-              {!!mirrors?.length && (
-                <Button onClick={() => probe(mirrors, "mirrors")} disabled={busyAll}
+              {!!mirrorItems.length && (
+                <Button onClick={() => probe(mirrorItems, "mirrors")} disabled={busyAll}
                   className="text-[12px] text-primary pressable disabled:opacity-50">
-                  {probing === "mirrors" ? "检测中…" : `全部检测（${mirrors.length}）`}
+                  {probing === "mirrors" ? "检测中…" : `全部检测（${mirrorItems.length}）`}
                 </Button>
               )}
             </>
@@ -282,7 +257,7 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
           {!loadingMirrors && !mirrorErr && mirrors?.length === 0 && (
             <div className="px-3.5 py-3 text-[12px] text-mut">地址发布页里没有可用的镜像地址</div>
           )}
-          {!loadingMirrors && (mirrors || []).map((it) => (
+          {!loadingMirrors && mirrorItems.map((it) => (
             <Row key={it.url} item={it} current={state?.base === it.url} probe={probes[it.url]}
               busy={probing === it.url} disabled={busyAll} onPick={pick} onProbe={(u) => probe([{ url: u }], u)} />
           ))}

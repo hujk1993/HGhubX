@@ -16,11 +16,6 @@
   font-family: var(--font-sans, system-ui, sans-serif);
   animation: launch-exit 180ms 2020ms ease-in both;
 }
-.theme-light .hg-launch {
-  --launch-ink: #15303a;
-  --launch-muted: #566e76;
-  --launch-bg: #eeefea;
-}
 .hg-launch-stage { position: relative; display: grid; justify-items: center; padding: 32px; transform: translateY(-8px); }
 .hg-launch-mark { position: relative; width: clamp(108px, 28vw, 152px); aspect-ratio: 1; }
 .hg-launch-svg { display: block; width: 100%; height: 100%; overflow: visible; }
@@ -34,7 +29,6 @@
 .hg-launch-x { animation: launch-x 720ms 890ms both; }
 .hg-launch-wordmark { display: flex; align-items: baseline; gap: 3px; margin-top: 28px; font-size: clamp(29px, 7vw, 36px); font-weight: 800; line-height: 1.2; letter-spacing: -1.6px; animation: launch-word 620ms 930ms both; }
 .hg-launch-word-x { color: #60cdff; animation: launch-word-x 550ms 1080ms both; }
-.theme-light .hg-launch-word-x { color: #087897; }
 .hg-launch-orbit { position: absolute; width: 218px; height: 218px; top: -2px; border: 1px solid #60cdff; border-radius: 50%; opacity: 0; animation: launch-ring 650ms 930ms both; pointer-events: none; }
 .hg-launch-footnote { position: absolute; bottom: max(calc(env(safe-area-inset-bottom) + 24px), 36px); font-size: 9px; line-height: 1.5; letter-spacing: 2.5px; color: var(--launch-muted); animation: launch-caption 350ms 1250ms both; }
 @keyframes launch-left {

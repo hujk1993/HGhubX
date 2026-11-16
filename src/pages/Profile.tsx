@@ -31,6 +31,7 @@ function ProfileContent({ wide }: { wide: boolean }) {
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
   const logoutPending = useRef(false);
+  const [clearOpen, setClearOpen] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
   const [clearError, setClearError] = useState("");
   const clearing = useRef(false);
@@ -42,6 +43,9 @@ function ProfileContent({ wide }: { wide: boolean }) {
   const cards = visibleIds.map(id => cache[id]).filter((card): card is Detail => !!card);
   const failed = failedIds.filter(id => visibleIds.includes(id));
   const idsKey = visibleIds.join(",");
+  const favoriteStateUnknown = tab === "fav" && !!user && !accountSync.favoritesKnown && favs.length === 0;
+  const favoriteSyncFailed = favoriteStateUnknown && !accountSync.busy;
+  const syncingFavorites = favoriteStateUnknown && !favoriteSyncFailed;
   /** 观看记录里这条的进度（收藏页没有） */
   const progressOf = (id: number) => (tab === "history" ? history.find((h) => h.id === id) : undefined);
 
@@ -89,6 +93,7 @@ function ProfileContent({ wide }: { wide: boolean }) {
     setClearBusy(true); setClearError("");
     try {
       await clearHistory();
+      if (mounted.current) setClearOpen(false);
     } catch (error) {
       if (mounted.current) setClearError(error instanceof Error ? error.message : "清空失败，观看记录已保留，请重试");
     } finally {
@@ -169,8 +174,14 @@ function ProfileContent({ wide }: { wide: boolean }) {
           ))}
         </SegmentedControl>
 
-        <div className="mt-3" aria-busy={loading}>
-          {loading && !cards.length ? (
+        <div className="mt-3" aria-busy={loading || syncingFavorites}>
+          {favoriteSyncFailed ? (
+            <Empty icon={<IStar size={24} />} title="收藏状态未知"
+              sub="账号同步未完成，暂时无法确认收藏内容。" action="重试"
+              onAction={() => { void syncAccount().catch(() => {}); }} />
+          ) : syncingFavorites ? (
+            <FavoriteSyncState wide={wide} />
+          ) : loading && !cards.length ? (
             <div className="flex justify-center py-8"><Loader className="w-7 h-7 spinner" /></div>
           ) : cards.length ? (
             <div className={`ios-media-grid ${wide ? "is-wide" : ""}`}>
@@ -205,9 +216,9 @@ function ProfileContent({ wide }: { wide: boolean }) {
           {visibleIds.length < ids.length && <Button disabled={loading} onClick={() => setLimits(previous => ({ ...previous, [tab]: previous[tab] + 12 }))}
             className="mt-3 w-full rounded-(--r-ctl) bg-s3 text-[13px] text-on">加载更多</Button>}
           {tab === "history" && history.length > 0 && (
-            <Button disabled={clearBusy} aria-busy={clearBusy} onClick={() => void clearWatchHistory()} className="mt-3 w-full h-9 rounded-(--r-ctl) bg-s3 text-[13px] text-mut pressable">{clearBusy ? "正在清空…" : "清空观看历史"}</Button>
+            <Button disabled={clearBusy} aria-busy={clearBusy} onClick={() => { setClearError(""); setClearOpen(true); }} className="mt-3 w-full h-9 rounded-(--r-ctl) bg-s3 text-[13px] text-mut pressable">{clearBusy ? "正在清空…" : "清空观看历史"}</Button>
           )}
-          {clearError && <p role="alert" className="mt-2 text-[13px] text-danger">{clearError}</p>}
+          {clearError && !clearOpen && <p role="alert" className="mt-2 text-[13px] text-danger">{clearError}</p>}
         </div>
 
         <div className="text-center text-[12px] text-dim mt-5">HGhubX {APP_VERSION} · {platform === "android" ? "Android" : platform === "ios" ? "iOS" : platform === "macos" ? "macOS" : platform === "linux" ? "Linux" : "Windows"} 客户端</div>
@@ -225,6 +236,38 @@ function ProfileContent({ wide }: { wide: boolean }) {
           </div>
         </div>
       </Modal>
+      <Modal open={clearOpen} onClose={() => { if (!clearing.current) setClearOpen(false); }} label="清空观看历史">
+        <div className="p-5">
+          <h2 className="text-[18px] font-bold">清空观看历史</h2>
+          <p className="mt-2 text-[14px] text-mut">确认清空全部观看历史？{user ? "当前账号的云端观看历史与本机缓存都会被清除。" : "本机游客观看历史会被清除。"}此操作无法撤销，收藏不会受影响。</p>
+          {clearError && <p role="alert" className="mt-3 text-[13px] text-danger">{clearError}</p>}
+          <div className="mt-4 flex gap-3">
+            <Button variant="secondary" disabled={clearBusy} onClick={() => setClearOpen(false)} className="flex-1">取消</Button>
+            <Button variant="danger" disabled={clearBusy} aria-busy={clearBusy} onClick={() => void clearWatchHistory()} className="flex-1 rounded-(--r-ctl) px-3">
+              {clearBusy ? "正在清空…" : "确认清空"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
+}
+
+function FavoriteSyncState({ wide }: { wide: boolean }) {
+  return <>
+    <div role="status" aria-live="polite" aria-label="正在同步收藏"
+      className="mb-4 flex items-center justify-center gap-2.5 text-[13px] text-mut">
+      <span aria-hidden="true" className="ios-loader spinner w-5 h-5" />
+      <span>正在同步收藏…</span>
+    </div>
+    <div aria-hidden="true" className={`ios-media-grid ${wide ? "is-wide" : ""}`}>
+      {[0, 1, 2, 3].map(index => (
+        <div key={index} className="min-w-0">
+          <div className="aspect-[3/4] w-full rounded-[22px] bg-s3 animate-pulse" />
+          <div className="mt-2.5 h-3.5 w-4/5 rounded-full bg-s3 animate-pulse" />
+          <div className="mt-2 h-3 w-1/2 rounded-full bg-s2 animate-pulse" />
+        </div>
+      ))}
+    </div>
+  </>;
 }

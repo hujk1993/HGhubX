@@ -119,6 +119,7 @@ pub fn bind_base(dir: &std::path::Path) {
     if let Ok(mut f) = BASE_FILE.write() {
         *f = Some(path);
     }
+    refresh_media_scope();
 }
 
 /// 切换线路并落盘，返回规整后的地址。
@@ -386,11 +387,104 @@ impl ProxyRoute {
 }
 
 static CLIENT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Rebuilding HTTP clients for a probe does not change the media transport.
+// Only a different effective configuration invalidates completed media caches.
+static MEDIA_CONFIG_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MEDIA_CONFIG_FINGERPRINT: Lazy<Mutex<Option<u64>>> = Lazy::new(|| Mutex::new(None));
 const CLIENT_TTL: Duration = Duration::from_secs(30);
 type ClientCache = HashMap<String, (Instant, Arc<reqwest::Client>)>;
 static CLIENTS: Lazy<Mutex<ClientCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static MEDIA_DNS_ROUTES: Lazy<Mutex<crate::media_dns::Routes>> =
     Lazy::new(|| Mutex::new(crate::media_dns::Routes::default()));
+
+/// Immutable transport identity captured when a media single-flight starts.
+///
+/// Only an effective line/proxy/security change increments `generation`.
+/// Routine connection/DNS refreshes leave completed media caches usable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RequestScope {
+    pub(crate) strict: bool,
+    pub(crate) generation: u64,
+}
+
+pub(crate) fn request_scope() -> RequestScope {
+    RequestScope {
+        strict: network_policy::strict_security(),
+        generation: MEDIA_CONFIG_GENERATION.load(Ordering::Acquire),
+    }
+}
+
+fn media_config_fingerprint(
+    origin: &str,
+    strict: bool,
+    config: &crate::proxy::Config,
+    system_proxy: u64,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    origin.hash(&mut hash);
+    strict.hash(&mut hash);
+    config.mode.hash(&mut hash);
+    match config.mode {
+        crate::proxy::Mode::Custom => config.url.hash(&mut hash),
+        crate::proxy::Mode::System => system_proxy.hash(&mut hash),
+        crate::proxy::Mode::Off => {}
+    }
+    hash.finish()
+}
+
+/// Snapshot system settings only when rebuilding clients, never per segment.
+/// Values (including proxy credentials) are hashed in memory and never logged.
+fn system_proxy_fingerprint() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    proxy_override().hash(&mut hash);
+    for name in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"] {
+        name.hash(&mut hash);
+        std::env::var_os(name).hash(&mut hash);
+    }
+    #[cfg(target_os = "linux")]
+    system_explicit_proxy().hash(&mut hash);
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    format!("{:?}", hyper_util::client::proxy::matcher::Matcher::from_system()).hash(&mut hash);
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        if let Ok(key) = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+        {
+            key.get_value::<u32, _>("ProxyEnable").ok().hash(&mut hash);
+            key.get_value::<String, _>("ProxyServer").ok().hash(&mut hash);
+            key.get_value::<String, _>("ProxyOverride").ok().hash(&mut hash);
+        }
+    }
+    hash.finish()
+}
+
+fn update_media_generation(
+    previous: &mut Option<u64>,
+    fingerprint: u64,
+    generation: &std::sync::atomic::AtomicU64,
+) {
+    if *previous != Some(fingerprint) {
+        *previous = Some(fingerprint);
+        generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+fn refresh_media_scope() {
+    if let Ok(mut previous) = MEDIA_CONFIG_FINGERPRINT.lock() {
+        let config = crate::proxy::snapshot();
+        let system_proxy = if config.mode == crate::proxy::Mode::System {
+            system_proxy_fingerprint()
+        } else {
+            0
+        };
+        let fingerprint = media_config_fingerprint(&base(), network_policy::strict_security(), &config, system_proxy);
+        update_media_generation(&mut previous, fingerprint, &MEDIA_CONFIG_GENERATION);
+    }
+}
 
 fn cached_client(cache: &ClientCache, key: &str, now: Instant) -> Option<Arc<reqwest::Client>> {
     cache
@@ -470,6 +564,9 @@ async fn client_for_dns(raw: &str, public_dns: bool) -> Result<(url::Url, Arc<re
 }
 
 pub fn refresh_client() {
+    // A periodic main-site probe can rebuild clients without changing proxy or
+    // line. Preserve KEY/SEG caches unless the actual configuration changed.
+    refresh_media_scope();
     // Builders still resolving DNS must not repopulate the new generation.
     CLIENT_GENERATION.fetch_add(1, Ordering::AcqRel);
     if let Ok(mut cache) = CLIENTS.lock() {
@@ -1442,6 +1539,74 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_generation_survives_repeated_refreshes_of_same_configuration() {
+        let config = crate::proxy::Config::for_test("system", "").unwrap();
+        let fingerprint = media_config_fingerprint(DEFAULT_BASE, true, &config, 17);
+        let generation = std::sync::atomic::AtomicU64::new(0);
+        let mut previous = None;
+        update_media_generation(&mut previous, fingerprint, &generation);
+        for _ in 0..8 {
+            update_media_generation(&mut previous, fingerprint, &generation);
+        }
+        assert_eq!(generation.load(Ordering::Acquire), 1);
+        let changed = media_config_fingerprint(DEFAULT_BASE, true, &config, 18);
+        update_media_generation(&mut previous, changed, &generation);
+        assert_eq!(generation.load(Ordering::Acquire), 2);
+        // Returning to a previous configuration is a new epoch too: an old
+        // in-flight response must not repopulate the newly selected scope.
+        update_media_generation(&mut previous, fingerprint, &generation);
+        assert_eq!(generation.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn media_fingerprint_changes_with_active_transport_configuration() {
+        let system = crate::proxy::Config::for_test("system", "").unwrap();
+        let direct = crate::proxy::Config::for_test("off", "").unwrap();
+        let custom = crate::proxy::Config::for_test("custom", "http://127.0.0.1:7897").unwrap();
+        let other_custom = crate::proxy::Config::for_test("custom", "http://127.0.0.1:7898").unwrap();
+        let initial = media_config_fingerprint(DEFAULT_BASE, true, &system, 17);
+        // The origin participates even when media URLs happen to be identical.
+        assert_ne!(initial, media_config_fingerprint("https://huangguoai.ai", true, &system, 17));
+        assert_ne!(initial, media_config_fingerprint(DEFAULT_BASE, false, &system, 17));
+        assert_ne!(initial, media_config_fingerprint(DEFAULT_BASE, true, &system, 18));
+        assert_ne!(initial, media_config_fingerprint(DEFAULT_BASE, true, &direct, 17));
+        assert_ne!(initial, media_config_fingerprint(DEFAULT_BASE, true, &custom, 17));
+        assert_ne!(
+            media_config_fingerprint(DEFAULT_BASE, true, &custom, 17),
+            media_config_fingerprint(DEFAULT_BASE, true, &other_custom, 17),
+        );
+    }
+
+    #[test]
+    fn media_fingerprint_ignores_inactive_proxy_preferences() {
+        let direct = crate::proxy::Config::for_test("off", "").unwrap();
+        let dormant_custom = crate::proxy::Config {
+            mode: crate::proxy::Mode::Off,
+            url: "http://127.0.0.1:7897".into(),
+        };
+        // Switching an OS proxy or retaining the previous custom address while
+        // direct mode is selected does not alter the active transport.
+        assert_eq!(
+            media_config_fingerprint(DEFAULT_BASE, true, &direct, 17),
+            media_config_fingerprint(DEFAULT_BASE, true, &dormant_custom, 18),
+        );
+        let custom = crate::proxy::Config::for_test("custom", "http://127.0.0.1:7897").unwrap();
+        assert_eq!(
+            media_config_fingerprint(DEFAULT_BASE, true, &custom, 17),
+            media_config_fingerprint(DEFAULT_BASE, true, &custom, 18),
+        );
+        let system = crate::proxy::Config::for_test("system", "").unwrap();
+        let dormant_custom = crate::proxy::Config {
+            mode: crate::proxy::Mode::System,
+            url: "http://127.0.0.1:7897".into(),
+        };
+        assert_eq!(
+            media_config_fingerprint(DEFAULT_BASE, true, &system, 17),
+            media_config_fingerprint(DEFAULT_BASE, true, &dormant_custom, 17),
+        );
+    }
 
     #[test]
     fn transport_errors_redact_proxy_auth_without_hiding_failure_category() {

@@ -179,7 +179,7 @@ export default function Settings({ onBack, initialSection }: { onBack: () => voi
               <span className="ios-setting-icon"><IBroom size={16} /></span>
               <div className="flex-1">
                 <div className="text-[14px] text-on">清理缓存</div>
-                <div className="text-[12px] text-mut">仅清除封面和播放列表缓存</div>
+                <div className="text-[12px] text-mut">非 Linux 只清应用内媒体缓存；Linux 桌面版额外清 WebView 缓存</div>
               </div>
               <IChevR size={15} className="text-mut" />
             </Button>
@@ -407,7 +407,7 @@ export default function Settings({ onBack, initialSection }: { onBack: () => voi
         <div className="p-5">
           <div className="text-[15px] font-bold text-on">清理缓存</div>
           <p className="text-[13px] text-mut leading-relaxed mt-2">
-            只清除封面与播放列表缓存（解密图 / m3u8）。收藏、观看记录、搜索历史与登录状态都会保留。
+            清除封面、播放列表、Key/分片缓存；Linux 桌面版还会选择性清理 WebKit HTTP/媒体磁盘缓存。登录、收藏、观看记录与本地设置都会保留。
           </p>
           {clearError && <p role="alert" className="text-[13px] text-danger mt-3">{clearError}</p>}
           <div className="flex gap-2 mt-5">
@@ -417,9 +417,9 @@ export default function Settings({ onBack, initialSection }: { onBack: () => voi
               clearBusy.current = true;
               setClearing(true); setClearError("");
               try {
-                await api.clearCache();
+                const cleared = await api.clearCache();
                 setClearOpen(false);
-                toast("缓存已清理", "ok");
+                toast(cleared.webCache ? "缓存已清理（含 WebKit 媒体缓存）" : "应用内缓存已清理", "ok");
               } catch (error) {
                 setClearError(error instanceof Error ? error.message : String(error || "清理失败，请重试"));
               } finally { clearBusy.current = false; setClearing(false); }

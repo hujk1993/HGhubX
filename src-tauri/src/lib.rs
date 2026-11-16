@@ -1,9 +1,12 @@
 mod api;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 mod apple_proxy;
+mod cache;
 mod env;
 #[cfg(target_os = "ios")]
 mod ios_layout;
+#[cfg(any(target_os = "ios", test))]
+mod ios_media_http;
 mod lines;
 #[cfg(target_os = "linux")]
 mod linux_http;
@@ -23,6 +26,20 @@ mod session;
 
 use api::Api;
 use tauri::Manager;
+
+/// AVFoundation loads media outside WKWebView's custom protocol handler.
+/// Start its loopback bridge only when an iOS native player requests it.
+#[tauri::command]
+async fn media_http_origin() -> Result<String, String> {
+    #[cfg(target_os = "ios")]
+    {
+        ios_media_http::origin().await
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        Err("原生媒体 HTTP 通道仅适用于 iOS".into())
+    }
+}
 
 fn allowed_dev_host(host: &str) -> bool {
     if matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") {
@@ -194,6 +211,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             api::app_boot,
+            media_http_origin,
             playback_log::playback_log_status,
             playback_log::playback_log_set,
             playback_log::playback_log_write,
@@ -231,6 +249,7 @@ pub fn run() {
             api::api_topic,
             api::api_tags,
             api::api_tag_videos,
+            api::api_post_tag,
             api::api_category,
             api::api_rank,
             api::api_search,

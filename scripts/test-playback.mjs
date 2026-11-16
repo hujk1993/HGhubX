@@ -1,13 +1,13 @@
 // Local-only headless playback checks. No upstream APIs, credentials or Tauri IPC are used.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { chromium } from "playwright-core";
 import { createServer as createViteServer } from "vite";
 
@@ -17,11 +17,11 @@ const { values: args } = parseArgs({ options: {
   scenarios: { type: "string", default: "seek,legacy,stall,lifecycle,mms,gesture,proxy" }, help: { type: "boolean" },
 } });
 if (args.help) {
-  console.log("pnpm test:playback [--media-dir DIR] [--output NEW_DIR] [--browser-executable PATH] [--scenarios seek,legacy,stall,lifecycle,mms,gesture,proxy]");
+  console.log("pnpm test:playback [--media-dir DIR] [--output NEW_DIR] [--browser-executable PATH] [--scenarios seek,legacy,stall,lifecycle,mms,gesture,proxy,ios-native,recovery,review]");
   process.exit(0);
 }
 const scenarios = args.scenarios.split(",");
-assert(scenarios.length && scenarios.every(s => ["seek", "legacy", "stall", "lifecycle", "mms", "gesture", "proxy"].includes(s)), "Unknown scenario");
+assert(scenarios.length && scenarios.every(s => ["seek", "legacy", "stall", "lifecycle", "mms", "gesture", "proxy", "ios-native", "recovery", "review"].includes(s)), "Unknown scenario");
 const output = resolve(args.output || join(root, "test-results", "playback", new Date().toISOString().replace(/[:.]/g, "-")));
 await mkdir(dirname(output), { recursive: true });
 await mkdir(output); // Refuse to overwrite artifacts from an earlier run.
@@ -262,15 +262,18 @@ async function stallCheck(page) {
   await loadPlayer(page);
   await page.waitForFunction(() => { const v = document.querySelector("video"); return v.buffered.length && v.buffered.end(0) >= 30; });
   await page.evaluate(async () => { await window.playerSeekFixture.setLogging(true); window.playerSeekFixture.pauseBuffering(); });
-  await page.route("**/seg?*", route => route.abort("failed"));
+  let segmentAttempts = 0;
+  await page.route("**/seg?*", route => { segmentAttempts += 1; return route.abort("failed"); });
   await clickProgress(page, .8);
   const logs = await waitLog(page, "seek.timeout");
   const timeout = logs.find(e => e.event === "seek.timeout");
   assert(timeout.data.ready < 3 && timeout.data.seeking, "Timeout must capture the stalled media state");
+  await page.waitForTimeout(250);
+  assert(segmentAttempts < 80, `Recoverable fragment failures must not fan out into a retry storm (${segmentAttempts} attempts)`);
   await page.unroute("**/seg?*");
   await page.evaluate(() => window.playerSeekFixture.resumeBuffering());
   await waitLog(page, "seek.resumed");
-  return { fault_injected: true, timeout_ms: timeout.data.elapsed_ms };
+  return { fault_injected: true, timeout_ms: timeout.data.elapsed_ms, segment_attempts: segmentAttempts };
 }
 async function managedMediaCheck(page) {
   // Chromium supplies real MSE decoding/buffering; only the MMS constructor and streaming
@@ -345,6 +348,7 @@ async function lifecyclePlayerCheck(page, legacy) {
     assert(!logs.some(e => e.event === "hlsFragLoading"), "Hidden manifest must not start fragment loading");
     await page.evaluate(() => window.playerSeekFixture.setActive(true));
     await page.waitForFunction(() => document.querySelector("video").currentTime > 1 && !document.querySelector("video").paused);
+    await page.locator(legacy ? ".post-player" : ".player-root").hover();
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await page.evaluate(() => window.playerSeekFixture.setActive(false));
     await page.waitForFunction(() => !window.playerSeekFixture.engineState().loading);
@@ -444,21 +448,134 @@ async function proxyRecoveryCheck(page) {
   return { players, failed_api_resolution_retried: true };
 }
 
-try {
-  let mediaDir = args["media-dir"] && resolve(args["media-dir"]);
-  if (!mediaDir) {
-    temporaryMedia = await mkdtemp(join(tmpdir(), "hghubx-playback-")); mediaDir = temporaryMedia;
+async function explicitRecoveryCheck(page) {
+  const players = [];
+  for (const legacy of [false, true]) {
+    let broken = true, manifestRequests = 0;
+    await page.route("**/hls?*", async route => {
+      manifestRequests += 1;
+      if (broken) return route.fulfill({ status: 404, headers: { "Access-Control-Allow-Origin": "*" }, body: "manifest unavailable" });
+      const response = await route.fetch({ url: fixtureMediaUrl(route.request().url()) });
+      return route.fulfill({ response });
+    });
     try {
-      execFileSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "90", "-c:v", "libx264", "-preset", "ultrafast", "-g", "30", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod", "-hls_segment_filename", join(mediaDir, "seg%03d.ts"), join(mediaDir, "list.m3u8")], { timeout: 60000, stdio: "pipe" });
-    } catch { throw new Error("Cannot generate HLS fixture: install FFmpeg (libx264/AAC), set FFMPEG_PATH, or pass --media-dir DIR"); }
+      const url = `${report.ui}/tests/player-seek.html?diagnostics=1&proxy=${encodeURIComponent(report.media)}${legacy ? "&legacy=1" : ""}`;
+
+      // A failed initial manifest must actually be re-requested automatically.
+      await page.goto(url);
+      const retry = page.getByRole("button", { name: "重试", exact: true });
+      await retry.waitFor();
+      assert.equal(manifestRequests, 5, "Initial manifest request plus four bounded reloads");
+      await page.waitForTimeout(1200);
+      assert.equal(manifestRequests, 5, "Terminal failure must stop automatic requests");
+      broken = false;
+      await retry.click();
+      await page.waitForFunction(() => document.querySelector("video")?.currentTime > 1);
+      assert.equal(manifestRequests, 6, "Manual retry reloads the manifest instead of just calling play");
+
+      // A recoverable source must stay dormant if covered before its retry fires.
+      broken = true; manifestRequests = 0;
+      const failedManifest = page.waitForResponse(response => new URL(response.url()).pathname === "/hls" && response.status() === 404);
+      await page.goto(url);
+      await failedManifest;
+      await page.waitForFunction(() => window.playerSeekFixture?.engineState().loading === false);
+      await page.evaluate(() => window.playerSeekFixture.setActive(false));
+      const hiddenRequests = manifestRequests;
+      await page.waitForTimeout(1200);
+      assert.equal(manifestRequests, hiddenRequests, "Covered player does not execute pending manifest recovery");
+      broken = false;
+      await page.evaluate(() => window.playerSeekFixture.setActive(true));
+      await page.waitForFunction(() => document.querySelector("video")?.currentTime > 1);
+
+      // Exhaust fatal media recovery without replacing the element or losing
+      // its clock. The actual UI retry must then rebuild the engine.
+      await page.waitForFunction(() => {
+        const video = document.querySelector("video");
+        return video?.buffered.length && video.buffered.end(0) >= 30;
+      });
+      await page.locator(legacy ? ".post-player" : ".player-root").hover();
+      if (legacy) {
+        await page.getByRole("button", { name: "播放速度 1 倍", exact: true }).click();
+        await page.getByRole("button", { name: "播放速度 1.25 倍", exact: true }).click();
+      } else {
+        await page.getByRole("button", { name: "倍速", exact: true }).click();
+        await page.getByRole("menuitemradio", { name: "1.5x", exact: true }).click();
+      }
+      await page.locator("video").evaluate(video => {
+        video.pause(); video.currentTime = 8;
+      });
+      await page.waitForFunction(() => !document.querySelector("video").seeking && document.querySelector("video").readyState >= 2);
+      await page.evaluate(() => {
+        window.__retryVideo = document.querySelector("video");
+        window.playerSeekFixture.stopForMediaFailure();
+      });
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        await page.evaluate(() => window.playerSeekFixture.failMedia());
+        await page.waitForFunction(attempt => window.playerSeekFixture.mediaRecoveryCalls === attempt, attempt);
+      }
+      await page.evaluate(() => window.playerSeekFixture.failMedia());
+      await retry.waitFor();
+      await page.evaluate(() => { window.playerSeekFixture.suppressMediaRecovery = false; });
+      await retry.click();
+      await page.waitForFunction(() => {
+        const video = document.querySelector("video");
+        return video && !video.paused && video.currentTime >= 8 && video.playbackRate === 1.5;
+      });
+      assert.equal(await page.locator("video").evaluate(video => video === window.__retryVideo), true,
+        "Retry replaces the HLS engine while retaining the DOM video and position");
+      players.push({ player: legacy ? "legacy" : "feed", bounded_manifest_reload: true,
+        hidden_retry_suspended: true, bounded_media_recovery: true, manual_retry_restores_position_rate_and_play: true });
+    } finally {
+      await page.unroute("**/hls?*");
+    }
   }
-  vite = await createViteServer({ root, server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, open: false } });
-  await vite.listen(); report.ui = `http://127.0.0.1:${vite.httpServer.address().port}`;
-  media = await serveMedia(mediaDir); report.media = `http://127.0.0.1:${media.address().port}`;
-  browser = await chromium.launch({ headless: true, executablePath: args["browser-executable"], args: ["--autoplay-policy=no-user-gesture-required"] });
-  report.browser_version = browser.version();
+  return { players };
+}
+
+try {
+  if (scenarios.some(name => name !== "ios-native")) {
+    let mediaDir = args["media-dir"] && resolve(args["media-dir"]);
+    if (!mediaDir) {
+      temporaryMedia = await mkdtemp(join(tmpdir(), "hghubx-playback-")); mediaDir = temporaryMedia;
+      try {
+        execFileSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "90", "-c:v", "libx264", "-preset", "ultrafast", "-g", "30", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod", "-hls_segment_filename", join(mediaDir, "seg%03d.ts"), join(mediaDir, "list.m3u8")], { timeout: 60000, stdio: "pipe" });
+      } catch { throw new Error("Cannot generate HLS fixture: install FFmpeg (libx264/AAC), set FFMPEG_PATH, or pass --media-dir DIR"); }
+    }
+    vite = await createViteServer({ root, server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, open: false } });
+    await vite.listen(); report.ui = `http://127.0.0.1:${vite.httpServer.address().port}`;
+    media = await serveMedia(mediaDir); report.media = `http://127.0.0.1:${media.address().port}`;
+    browser = await chromium.launch({ headless: true, executablePath: args["browser-executable"], args: ["--autoplay-policy=no-user-gesture-required"] });
+    report.browser_version = browser.version();
+  }
   for (const name of scenarios) {
     const dir = join(output, name); await mkdir(dir);
+    if (name === "ios-native") {
+      const result = { name, status: "running", started: new Date().toISOString() }; report.cases.push(result);
+      let stdout = "", stderr = "";
+      try {
+        const child = await promisify(execFile)(process.execPath, [join(root, "scripts/test-ios-native-media.mjs")], {
+          cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 2 * 1024 * 1024,
+          env: { ...process.env, ...(args["browser-executable"] ? { BROWSER_EXECUTABLE: args["browser-executable"] } : {}) },
+        });
+        stdout = child.stdout; stderr = child.stderr;
+        result.metrics = { exit_code: 0, transport: "mock IPC/HLS; real Player/VideoSurface" };
+        result.status = "passed"; console.log(`PASS ${name}: ${JSON.stringify(result.metrics)}`);
+      } catch (error) {
+        stdout = error.stdout || ""; stderr = error.stderr || "";
+        result.status = "failed"; result.error = error.message;
+        result.exit_code = typeof error.code === "number" ? error.code : null;
+        result.signal = error.signal || null;
+        console.error(`FAIL ${name}: ${error.message}`);
+      } finally {
+        if (stdout) process.stdout.write(stdout);
+        if (stderr) process.stderr.write(stderr);
+        await writeFile(join(dir, "stdout.log"), stdout);
+        await writeFile(join(dir, "stderr.log"), stderr);
+        result.finished = new Date().toISOString();
+        await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2) + "\n");
+      }
+      continue;
+    }
     const context = await browser.newContext({ ...(name === "gesture" ? {userAgent:"Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 Version/17.1 Mobile/15E148 Safari/604.1",hasTouch:true} : {}), viewport: { width: 1000, height: 900 } });
     await context.exposeBinding("collectPlaybackLogs", (_source, entries) => {
       for (const e of entries) jsonl(join(dir, "playback.jsonl"), { ts: e.data.at, event: `web.${e.event}`, data: e.data, transport: "browser-fixture" });
@@ -482,7 +599,21 @@ try {
     const result = { name, status: "running", started: new Date().toISOString() }; report.cases.push(result);
     let deadline;
     try {
-      const action = name === "proxy" ? proxyRecoveryCheck(page) : name === "gesture" ? gestureChecks(page) : name === "seek" || name === "legacy" ? seekChecks(page, name === "legacy") : name === "stall" ? stallCheck(page) : name === "mms" ? managedMediaCheck(page) : lifecycleCheck(page);
+      if (name === "review") {
+        result.metrics = await new Promise((resolve, reject) => {
+          const child = spawn(process.execPath, [join(root, "scripts/test-round-review.mjs")], {
+            cwd: root,
+            env: { ...process.env, BROWSER_EXECUTABLE: args["browser-executable"] || chromium.executablePath() },
+            stdio: "inherit",
+          });
+          child.once("error", reject);
+          child.once("close", code => code === 0 ? resolve({ focused_checks: true }) : reject(new Error(`Round review checks exited ${code}`)));
+        });
+        result.status = "passed";
+        console.log(`PASS ${name}: ${JSON.stringify(result.metrics)}`);
+        continue;
+      }
+      const action = name === "recovery" ? explicitRecoveryCheck(page) : name === "proxy" ? proxyRecoveryCheck(page) : name === "gesture" ? gestureChecks(page) : name === "seek" || name === "legacy" ? seekChecks(page, name === "legacy") : name === "stall" ? stallCheck(page) : name === "mms" ? managedMediaCheck(page) : lifecycleCheck(page);
       result.metrics = await Promise.race([action, new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("Scenario exceeded 45 seconds")), 45000); })]);
       assert.deepEqual(pageErrors, [], "Browser script errors");
       assert.deepEqual(externalRequests, [], "Unexpected external network requests");

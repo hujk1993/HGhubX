@@ -14,6 +14,7 @@ import { InplaceSearch } from "../components/InplaceSearch";
 import { FilteredContent } from "../components/FilteredContent";
 import { TagBlockMenu } from "../components/TagBlockMenu";
 import { useContentPreferences } from "../contentPreferences";
+import { postHot } from "../postData";
 
 /* ================= 吃瓜列表 ================= */
 export function PostsPage({ onBack, wide }: { onBack: () => void; wide: boolean }) {
@@ -256,7 +257,7 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
               <h1 className="text-[17px] font-bold text-on leading-snug">{currentPost.title}</h1>
               <div className="flex items-center gap-2 mt-2 text-[12px] text-mut">
                 <span>{currentPost.publish_time || currentPost.created_at}</span>
-                <span className="flex items-center gap-1"><IFireF size={10} />{fmt(currentPost.hot)}</span>
+                <span className="flex items-center gap-1"><IFireF size={10} />{fmt(postHot(currentPost))}</span>
               </div>
               <div className="flex flex-wrap gap-1.5 mt-2.5">
                 {(currentPost.tags || []).filter((t) => !t.includes(HIDDEN_POST_TAG)).slice(0, 8).map((t) => (

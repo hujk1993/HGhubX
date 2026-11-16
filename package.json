@@ -1,7 +1,7 @@
 {
   "name": "hghubx",
   "private": true,
-  "version": "2.1.0",
+  "version": "2.1.2",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
     "test:playback": "node scripts/test-playback.mjs",
     "test:api-loading": "node scripts/test-api-loading.mjs",
     "test:channel-pagination": "node scripts/test-channel-pagination.mjs",
+    "test:topic-pagination": "node scripts/test-topic-pagination.mjs",
+    "test:post-hot": "node scripts/test-post-detail-hot.mjs",
     "test:mobile-layout": "node scripts/test-mobile-layout.mjs",
     "test:ios-ui": "node scripts/test-ios-ui.mjs",
     "test:ios-icons": "node scripts/test-ios-icons.mjs",
