@@ -1,23 +1,35 @@
-export function installFixture({ theme, titles }) {
+export function installFixture({ theme, titles, metrics = [], metricPages = 1, metricPageSize = 2 }) {
   const cards = titles.map((title, i) => ({
-    id: i + 1, title, cover: `https://fixture.invalid/poster/${i}`, tags: ["都市", "剧情"], score: i % 2 === 0 ? 8.5 : 0,
-    episode_count: 24, total_episodes: 24, hot: 286000, like_count: 1800, collect_count: 900,
+    id: i + 1, title, cover: `https://fixture.invalid/poster/${i}`, tags: ["都市", "剧情"], score: metrics[i]?.score ?? (i % 2 === 0 ? 8.5 : 0),
+    episode_count: 24, total_episodes: 24,
+    hot: metrics[i]?.hot ?? 286000, like_count: metrics[i]?.like_count ?? 1800, collect_count: metrics[i]?.collect_count ?? 900,
     comment_count: 20, is_finished: true, is_original: 0, description: "界面回归示例数据",
     author: { id: 1, name: "示例作者" },
   }));
   const topic = { id: 1, title: "本周精选", slug: "weekly", cover: cards[0].cover, intro: "城市与故事", video_count: cards.length };
   const paged = items => ({ items, pagination: { page: 1, pages: 1, size: 30, total: items.length } });
+  const metricPaged = page => {
+    if (metricPages <= 1) return paged(cards);
+    const start = (page - 1) * metricPageSize;
+    return {
+      items: cards.slice(start, start + metricPageSize),
+      pagination: { page, pages: metricPages, size: metricPageSize, total: cards.length },
+    };
+  };
   localStorage.setItem("hghubx_theme", theme);
   localStorage.setItem("hghubx_app_v1", JSON.stringify({ favs: [1, 2, 3, 4, 5, 6], history: [{ id: 1, ep: 3, t: 55, dur: 180, at: 123 }], searchHist: ["都市"] }));
   localStorage.setItem("hghubx_swipe_ep_v2", "1");
   const callbacks = new Map();
-  let nextCallback = 0, backChannel;
+  let nextCallback = 0;
+  // Real Tauri keeps every registered listener: the app shell and the launch
+  // overlay can both listen for back-button, and unregister removes exactly one.
+  const backChannels = new Map();
   window.__IOS_UI_FIXTURE__ = {
     hardwareBack() {
-      if (!backChannel) throw new Error("Android back listener was not registered");
-      backChannel.onmessage({});
+      if (!backChannels.size) throw new Error("Android back listener was not registered");
+      for (const channel of [...backChannels.values()]) channel.onmessage({});
     },
-    hasHardwareBack() { return !!backChannel; },
+    hasHardwareBack() { return backChannels.size > 0; },
   };
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
@@ -28,7 +40,9 @@ export function installFixture({ theme, titles }) {
       if (command === "playback_log_status") return { enabled: false, path: null, error: null };
       if (command === "line_auto") return { base: "https://fixture.invalid", previous: "https://fixture.invalid", switched: false, pick: { tier: "main", ms: 1, reason: "fixture", candidates: [] } };
       if (command === "api_feed") return paged([]);
-      if (["api_category", "api_original_videos", "api_search", "api_posts", "api_post_category", "api_tag_videos"].includes(command)) return paged(cards);
+      if (["api_category", "api_original_videos", "api_search", "api_posts", "api_post_category", "api_tag_videos"].includes(command)) {
+        return args.size === 100 ? metricPaged(args.page || 1) : paged(cards);
+      }
       if (command === "api_topics") return paged([topic]);
       if (command === "api_topic") return { topic, videos: paged(cards), related: [] };
       if (command === "api_tags") return { categories: [{ name: "题材", tags: [{ id: 1, name: "都市", slug: "city" }] }] };
@@ -42,7 +56,8 @@ export function installFixture({ theme, titles }) {
       if (command === "api_logout") return { ok: true };
       if (command === "security_set") return args.strict;
       if (command === "api_play") throw "UI fixture has no media";
-      if (command === "plugin:app|register_listener" && args.event === "back-button") { backChannel = args.handler; return; }
+      if (command === "plugin:app|register_listener" && args.event === "back-button") { backChannels.set(args.handler.id, args.handler); return null; }
+      if (command === "plugin:app|remove_listener" && args.event === "back-button") { backChannels.delete(args.channelId); return null; }
       if (command === "plugin:window|is_maximized" || command === "plugin:window|is_fullscreen") return false;
       return null;
     },

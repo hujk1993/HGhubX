@@ -16,6 +16,10 @@ pub struct CacheClearReport {
 }
 
 pub async fn clear_web_cache(webview: &tauri::Webview) -> Result<CacheClearReport, String> {
+    use tauri::Manager;
+    if let Ok(dir) = webview.app_handle().path().app_cache_dir() {
+        crate::updater::cleanup_tv_updates(&dir);
+    }
     #[cfg(target_os = "linux")]
     {
         linux::clear(webview).await?;

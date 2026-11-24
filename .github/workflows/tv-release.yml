@@ -1,0 +1,194 @@
+name: TV Release
+run-name: "TV Release · ${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
+
+# TV 版打包与独立发布（CD）：推送 tv-v* tag 或手动触发时先跑轻量前置门禁，再打包 Android TV APK 并发布独立 TV Release（--latest=false）。
+# TV 版日常验收（CI）见 .github/workflows/tv.yml。
+on:
+  push:
+    tags: ["tv-v*"]
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: "快速编译：thin LTO + 4 个 codegen 单元，不编 x86_64（勾选时不发布 Release）"
+        type: boolean
+        default: true
+      tag:
+        description: "发版 tag（如 tv-v2.2.4）：配合 quick=false 发布独立 TV Release（--latest=false）；留空只出产物"
+        type: string
+        default: ""
+      prerelease:
+        description: "标记为 Pre-release（仅发布 Release 时生效）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tv-release-${{ github.ref }}-${{ (startsWith(github.ref, 'refs/tags/tv-v') || inputs.tag != '') && github.run_id || 'quick' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.tag == '' }}
+
+env:
+  CI: "true"
+
+jobs:
+  preflight:
+    name: TV release preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: 校验 TV 版本号与发布说明
+        id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/tv-v* ]]; then
+            TAG="$GITHUB_REF_NAME"
+            V="${GITHUB_REF_NAME#tv-v}"
+          elif [[ -n "$INPUT_TAG" ]]; then
+            TAG="$INPUT_TAG"
+            V="${INPUT_TAG#tv-v}"
+            V="${V#v}"
+          else
+            TAG=""
+            V="$(node -p "require('./src-tauri/tauri.tv.conf.json').version")"
+          fi
+          node scripts/set-version.mjs --target tv "$V"
+          node scripts/check-i18n.mjs
+          node scripts/check-doc-links.mjs
+          if [[ -n "$TAG" && ! -f "docs/release-notes/tv/${TAG}.md" ]]; then
+            echo "::notice::未找到 docs/release-notes/tv/${TAG}.md，发布时将回退自动生成说明"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Android TV (split per ABI)
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ inputs.quick && 'thin' || 'true' }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ inputs.quick && '4' || '1' }}
+      HGHUBX_APP_VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: TV 版本号对齐 tag
+        shell: bash
+        run: node scripts/set-version.mjs --target tv "${{ needs.preflight.outputs.version }}"
+      - uses: ./.github/actions/setup-node-pnpm
+      - uses: ./.github/actions/setup-android-sdk
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: swatinem/rust-cache@v2.9.3
+        continue-on-error: true
+        timeout-minutes: 8
+        with:
+          workspaces: src-tauri -> target
+          key: android-tv
+      - name: 选择 Android TV 配置并生成工程
+        run: |
+          cp src-tauri/tauri.tv.conf.json src-tauri/tauri.android.conf.json
+          pnpm tauri android init --ci
+      - name: 编译 APK（按 ABI 分包）
+        run: |
+          if [ "${{ inputs.quick }}" = "true" ]; then
+            TARGETS="aarch64 armv7"
+          else
+            TARGETS="aarch64 armv7 x86_64"
+          fi
+          echo "targets: $TARGETS"
+          pnpm tauri android build --apk --split-per-abi --target $TARGETS
+      - name: 签名 APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::error::缺少 ANDROID_KEY_BASE64 secret，无法签名"; exit 1
+          fi
+          PREFIX="HGhubX-TV"
+          KS="$RUNNER_TEMP/release.keystore"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+          BT="$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/$BT/apksigner"
+          mkdir -p artifacts
+          found=0
+          for f in $(find src-tauri/gen/android/app/build/outputs/apk -name '*-release*.apk'); do
+            abi="$(basename "$(dirname "$(dirname "$f")")")"
+            out="artifacts/${PREFIX}_${VERSION}_${abi}.apk"
+            "$APKSIGNER" sign \
+              --ks "$KS" --ks-key-alias "$KEY_ALIAS" \
+              --ks-pass "pass:$STORE_PASSWORD" --key-pass "pass:$KEY_PASSWORD" \
+              --v4-signing-enabled false \
+              --out "$out" "$f"
+            "$APKSIGNER" verify --print-certs "$out" | head -3
+            found=$((found+1))
+          done
+          rm -f "$KS"
+          if [ "$found" -eq 0 ]; then echo "::error::没有找到 release APK"; exit 1; fi
+          AAPT2="$(ls "$ANDROID_SDK_ROOT"/build-tools/*/aapt2 | sort -V | tail -1)"
+          for a in artifacts/*.apk; do "$AAPT2" dump badging "$a" | grep -m1 "^package:"; done
+          ls -lh artifacts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-tv
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish TV GitHub Release
+    needs: [package]
+    if: >-
+      !cancelled() &&
+      needs.package.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/tv-v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.tag != '' && !inputs.quick))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-tv
+          path: artifacts
+      - name: 列出待发布 TV 产物
+        run: ls -lh artifacts
+      - name: 创建或更新 TV GitHub Release（不抢占 Latest）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，覆盖上传 TV 产物"
+            gh release upload "$TAG" artifacts/* --clobber -R "$GITHUB_REPOSITORY"
+            exit 0
+          fi
+          NOTES="docs/release-notes/tv/${TAG}.md"
+          EXTRA=(--latest=false)
+          if [ -f "$NOTES" ]; then
+            echo "使用 $NOTES"
+            EXTRA+=(--notes-file "$NOTES")
+          else
+            echo "没有 $NOTES，回退自动生成的说明"
+            EXTRA+=(--generate-notes)
+          fi
+          if [ "$PRERELEASE" = "true" ] || [[ "${TAG#tv-v}" == *-* ]]; then
+            EXTRA+=(--prerelease)
+          fi
+          gh release create "$TAG" artifacts/* --title "HGhubX TV ${TAG}" "${EXTRA[@]}" -R "$GITHUB_REPOSITORY"

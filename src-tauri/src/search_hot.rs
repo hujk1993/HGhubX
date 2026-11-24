@@ -2,15 +2,12 @@ use dom_query::{Document, Selection};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_ITEMS: usize = 20;
 const JS_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-
-static CACHE_BUST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct HotVideo {
@@ -91,24 +88,15 @@ fn parse_items(html: &str) -> Result<Vec<HotVideo>, String> {
     }
 }
 
-fn cache_bust_value() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let sequence = CACHE_BUST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("{timestamp}-{sequence}")
+fn search_page_url(base: &str) -> String {
+    format!("{}/search/", base.trim_end_matches('/'))
 }
 
 async fn fetch_html() -> Result<String, String> {
     let base = crate::net::base();
     tokio::time::timeout(REQUEST_TIMEOUT, async {
         let referer = format!("{base}/");
-        let url = format!(
-            "{}/search/?_hghubx_hot={}",
-            base,
-            cache_bust_value()
-        );
+        let url = search_page_url(&base);
         let mut response = crate::net::get(
             &url,
             REQUEST_TIMEOUT,
@@ -128,7 +116,7 @@ async fn fetch_html() -> Result<String, String> {
         }
 
         let mut html = Vec::with_capacity(response.content_length().unwrap_or(0) as usize);
-        while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        while let Some(chunk) = response.chunk().await.map_err(|error| crate::net::err_text(&error))? {
             if html.len().saturating_add(chunk.len()) > MAX_HTML_BYTES {
                 return Err("官网搜索页超过 2 MiB 限制".into());
             }

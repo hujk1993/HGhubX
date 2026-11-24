@@ -1,62 +1,170 @@
 name: CI
+run-name: "CI · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && format('{0} ({1})', inputs.mode, github.ref_name) || github.ref_name) }}"
 
+# 标准版持续集成（CI）：PR、推送 main 或手动触发时执行前端、Rust、Smoke 与播放诊断。
+# 纯文档变更（docs/** / *.md）仅跑前端与文档链接校验，跳过耗时的 Rust / Smoke / Playback。
+# 打包与正式发版（v*）见独立 CD 工作流 .github/workflows/release.yml。
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "运行模式：ci 跑全量校验；playback 只跑播放诊断"
+        type: choice
+        default: ci
+        options: [ci, playback]
+      scenarios:
+        description: "播放诊断场景：all 或逗号分隔子集"
+        type: string
+        default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'branch' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  CI: "true"
 
 jobs:
+  changes:
+    name: Detect changed scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          fetch-depth: 0
+      - name: Classify changed files
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FILES=""
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$BASE_REF" ]; then
+            git fetch --no-tags origin "$BASE_REF" || true
+            FILES="$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null || true)"
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            FILES="$(git diff --name-only "${BEFORE_SHA}" "${HEAD_SHA}" 2>/dev/null || true)"
+          fi
+          if [ -z "$FILES" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          DOCS_ONLY="true"
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              docs/*|*.md) ;;
+              *) DOCS_ONLY="false"; break ;;
+            esac
+          done <<< "$FILES"
+          echo "Changed files:"
+          echo "$FILES"
+          echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
+
   frontend:
     name: Frontend build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    if: github.event_name != 'workflow_dispatch' || inputs.mode == 'ci'
     steps:
       - uses: actions/checkout@v7
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: Version fields
+        run: node scripts/check-version-sync.mjs
+      - name: i18n dictionaries
+        run: node scripts/check-i18n.mjs
+      - name: Documentation links
+        run: node scripts/check-doc-links.mjs
       - name: Build frontend
         run: pnpm build
+      - name: Size budgets
+        run: node scripts/check-size-budgets.mjs
 
   rust:
-    name: Rust compile check
+    name: Rust check and test
+    needs: [changes]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.mode == 'ci') &&
+      needs.changes.outputs.docs_only != 'true'
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf build-essential curl wget file libssl-dev libxdo-dev
-
+      - uses: ./.github/actions/install-webkitgtk
+        with:
+          cache-key: apt-webkit-ubuntu24-v1
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: swatinem/rust-cache@v2.9.3
         with:
           workspaces: src-tauri -> target
           key: ci-rust
-
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check --all-targets
+      - name: Cargo test
+        working-directory: src-tauri
+        run: cargo test --lib
+
+  smoke:
+    name: Browser smoke
+    needs: [changes]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.mode == 'ci') &&
+      needs.changes.outputs.docs_only != 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-pnpm
+      - uses: ./.github/actions/setup-ffmpeg-chrome
+        with:
+          with-ffmpeg: "false"
+      - name: Run smoke fixtures
+        run: pnpm test:smoke
+
+  playback:
+    name: Playback (${{ matrix.shard }})
+    needs: [changes]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.docs_only != 'true'
+    strategy:
+      fail-fast: false
+      matrix: >-
+        ${{
+          (inputs.scenarios == '' || inputs.scenarios == 'all') &&
+          fromJSON('{"include":[{"shard":"core","scenarios":"seek,legacy,lifecycle,gesture,proxy,portrait-fit,ambient,post-flicker"},{"shard":"extended","scenarios":"episode-toast,balance-volume,ios-native,recovery,review"}]}') ||
+          fromJSON(format('{{"include":[{{"shard":"custom","scenarios":{0}}}]}}', toJSON(inputs.scenarios)))
+        }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-pnpm
+      - uses: ./.github/actions/setup-ffmpeg-chrome
+      - name: Run playback checks and collect diagnostics
+        env:
+          PLAYBACK_SCENARIOS: ${{ matrix.scenarios }}
+        run: pnpm test:playback --browser-executable "$BROWSER_EXECUTABLE" --scenarios "$PLAYBACK_SCENARIOS" --output test-results/playback-ci
+      - name: Upload diagnostics even when a check fails
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playback-diagnostics-${{ matrix.shard }}
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: warn

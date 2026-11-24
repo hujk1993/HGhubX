@@ -1,0 +1,108 @@
+name: TV CI
+run-name: "TV CI · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || github.ref_name }}"
+
+# TV 版持续集成（CI）：PR 或推送 main 且 TV 专属或共享依赖路径变化时，校验 TV 版本、构建 TV 前端并跑遥控器验收。
+# TV 版独立打包与 tv-v* 发布（CD）见 .github/workflows/tv-release.yml。
+on:
+  pull_request:
+    paths:
+      - "src/tv/**"
+      - "src/shared/**"
+      - "src/features/playback/**"
+      - "src/app/startup/**"
+      - "src/editionEntry.ts"
+      - "src/edition.ts"
+      - "src/legacyRuntime.ts"
+      - "src/styles/launch.css"
+      - "src/styles/usage-agreement.css"
+      - "src/styles/legacy-webview.css"
+      - "index.html"
+      - "vite.config.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "tsconfig*.json"
+      - "scripts/legacy-css.ts"
+      - "scripts/test-tv-remote.mjs"
+      - "scripts/test-playback.mjs"
+      - "scripts/build-android-tv.mjs"
+      - "scripts/patch-android-tv.mjs"
+      - "scripts/patch-android-splash.mjs"
+      - "scripts/sync-android-icons.mjs"
+      - "scripts/set-version.mjs"
+      - "scripts/check-version-sync.mjs"
+      - "tests/tv-*"
+      - "src-tauri/tauri.tv.conf.json"
+      - "src-tauri/tv/**"
+      - "src-tauri/src/**"
+      - "src-tauri/Cargo.*"
+      - ".github/workflows/tv.yml"
+      - ".github/actions/**"
+  push:
+    branches: [main]
+    paths:
+      - "src/tv/**"
+      - "src/shared/**"
+      - "src/features/playback/**"
+      - "src/app/startup/**"
+      - "src/editionEntry.ts"
+      - "src/edition.ts"
+      - "src/legacyRuntime.ts"
+      - "src/styles/launch.css"
+      - "src/styles/usage-agreement.css"
+      - "src/styles/legacy-webview.css"
+      - "index.html"
+      - "vite.config.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "tsconfig*.json"
+      - "scripts/legacy-css.ts"
+      - "scripts/test-tv-remote.mjs"
+      - "scripts/test-playback.mjs"
+      - "scripts/build-android-tv.mjs"
+      - "scripts/patch-android-tv.mjs"
+      - "scripts/patch-android-splash.mjs"
+      - "scripts/sync-android-icons.mjs"
+      - "scripts/set-version.mjs"
+      - "scripts/check-version-sync.mjs"
+      - "tests/tv-*"
+      - "src-tauri/tauri.tv.conf.json"
+      - "src-tauri/tv/**"
+      - "src-tauri/src/**"
+      - "src-tauri/Cargo.*"
+      - ".github/workflows/tv.yml"
+      - ".github/actions/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tv-ci-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'branch' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  CI: "true"
+
+jobs:
+  acceptance:
+    name: TV build & acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: TV version fields
+        run: node scripts/check-version-sync.mjs --target tv
+      - name: Build TV frontend
+        run: VITE_APP_EDITION=tv pnpm build
+      - uses: ./.github/actions/setup-ffmpeg-chrome
+      - name: Run TV acceptance
+        run: node scripts/test-tv-remote.mjs
+      - name: Upload diagnostics even when a check fails
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tv-acceptance-diagnostics
+          path: test-results/tv-remote/
+          retention-days: 7
+          if-no-files-found: warn

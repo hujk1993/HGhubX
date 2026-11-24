@@ -4,12 +4,15 @@
  *
  * 用法：
  *   node scripts/set-version.mjs 1.2.1+hg.1
+ *   node scripts/set-version.mjs --target tv 2.2.4
  *
  * 为什么要这个脚本：
  *   Tauri 自己推导 versionCode 时会忽略 `+hg.1` 这种后缀，于是
  *   1.2.0 和 1.2.0+hg.1 得到同一个 1002000。同一串号装不上升级感，
  *   Windows 的 NSIS 也认为「版本没变」。所以这里按 major.minor.patch
  *   算出明确的值写进 bundle.android.versionCode，CI 和本地都走同一条路。
+ *   TV 版作为同仓子项目独立维护版本号与 versionCode（只写 src-tauri/tauri.tv.conf.json），
+ *   不改写标准版 package.json / tauri.conf.json / Cargo.toml。
  *
  * 公式与 Tauri 内部一致：major * 1_000_000 + minor * 1_000 + patch
  *   1.2.0  -> 1002000
@@ -19,9 +22,28 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const raw = (process.argv[2] || "").trim();
+const args = process.argv.slice(2);
+let target = "standard";
+const positional = [];
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === "--target") {
+    target = (args[++i] || "").trim();
+  } else if (arg.startsWith("--target=")) {
+    target = arg.slice("--target=".length).trim();
+  } else {
+    positional.push(arg);
+  }
+}
+
+if (target !== "standard" && target !== "tv") {
+  console.error(`不支持的 target: ${target}（仅支持 standard 或 tv）`);
+  process.exit(1);
+}
+
+const raw = (positional[0] || "").trim();
 if (!raw) {
-  console.error("用法: node scripts/set-version.mjs <major.minor.patch[+build]>");
+  console.error("用法: node scripts/set-version.mjs [--target standard|tv] <major.minor.patch[+build]>");
   process.exit(1);
 }
 
@@ -46,6 +68,16 @@ function update(rel, fn) {
   fn(json);
   fs.writeFileSync(p, JSON.stringify(json, null, 2) + "\n");
   console.log(`  ${rel} -> ${json.version}${json.bundle?.android?.versionCode ? ` (versionCode ${json.bundle.android.versionCode})` : ""}`);
+}
+
+if (target === "tv") {
+  update("src-tauri/tauri.tv.conf.json", (j) => {
+    j.version = raw;
+    j.bundle = j.bundle ?? {};
+    j.bundle.android = { ...(j.bundle.android ?? {}), versionCode };
+  });
+  console.log(`target=tv  versionName=${raw}  versionCode=${versionCode}`);
+  process.exit(0);
 }
 
 update("package.json", (j) => {

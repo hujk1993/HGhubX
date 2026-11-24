@@ -1,0 +1,49 @@
+name: Install Linux WebKitGTK Dependencies
+description: Install cached Linux WebKitGTK / GTK build dependencies using the maintainer-configured mirror.
+
+inputs:
+  cache-key:
+    description: "Cache key for ~/apt-webkit-debs (must match runner Ubuntu major version)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Linux WebKitGTK .deb packages
+      id: apt-cache
+      uses: actions/cache@v6
+      with:
+        path: ~/apt-webkit-debs
+        key: ${{ inputs.cache-key }}
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        install_from_mirror() {
+          mkdir -p ~/apt-webkit-debs
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f ! -name 'ubuntu.sources' -delete
+          printf 'https://mirrors.edge.kernel.org/ubuntu/\nhttp://archive.ubuntu.com/ubuntu/\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i -E 's|^URIs:.*|URIs: https://mirrors.edge.kernel.org/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          if [ -f /etc/apt/sources.list ]; then
+            sudo sed -i -E 's|https?://[^/[:space:]]+/ubuntu/?|https://mirrors.edge.kernel.org/ubuntu/|g' /etc/apt/sources.list
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
+          sudo apt-get -o Dir::Cache::archives="$HOME/apt-webkit-debs" -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+            install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf build-essential curl wget file libssl-dev libxdo-dev
+          sudo rm -rf ~/apt-webkit-debs/lock ~/apt-webkit-debs/partial 2>/dev/null || true
+          sudo chown -R "$USER:$USER" ~/apt-webkit-debs
+        }
+        if [ "${{ steps.apt-cache.outputs.cache-hit }}" = "true" ] && compgen -G "$HOME/apt-webkit-debs/*.deb" >/dev/null; then
+          echo "Installing WebKitGTK dependencies from cached .deb packages..."
+          if ! (sudo dpkg --unpack ~/apt-webkit-debs/*.deb && sudo dpkg --configure -a); then
+            sudo apt-get -f install -y || true
+            rm -rf ~/apt-webkit-debs/*
+            install_from_mirror
+          fi
+        else
+          install_from_mirror
+        fi

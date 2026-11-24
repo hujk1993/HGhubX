@@ -80,7 +80,7 @@ pub fn set_strict_security(strict: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn is_internal_webview_host(name: &str) -> bool {
+pub(crate) fn is_internal_webview_host(name: &str) -> bool {
     let name = name.trim_end_matches('.').to_ascii_lowercase();
     matches!(
         name.as_str(),
@@ -158,11 +158,15 @@ pub fn parse_target_with_mode(raw: &str, strict: bool) -> Result<Url, String> {
     Ok(url)
 }
 
+fn denied_target() -> String {
+    "禁止访问普通内网、回环或保留地址（仅放行 FakeIP 198.18.0.0/15）".into()
+}
+
 fn check_ip(ip: IpAddr) -> Result<(), String> {
     if allowed_ip(ip) {
         Ok(())
     } else {
-        Err("禁止访问普通内网、回环或保留地址（仅放行 FakeIP 198.18.0.0/15）".into())
+        Err(denied_target())
     }
 }
 
@@ -176,7 +180,8 @@ pub fn check_addresses_with_mode(addrs: &[SocketAddr], strict: bool) -> Result<(
         return Err("目标没有可用的 DNS 地址".into());
     }
     if strict {
-        // 混合公私网答案整体拒绝，不能让连接器回退到私网地址。
+        // 外部 DNS 结果整体校验：混合公私网答案整体拒绝，不能让连接器回退到私网地址。
+        // 系统解析路径先经 pinable_addresses 收敛，不会走到这里。
         for addr in addrs {
             check_ip(addr.ip())?;
         }
@@ -189,6 +194,26 @@ pub fn check_addresses_with_mode(addrs: &[SocketAddr], strict: bool) -> Result<(
 /// 而同一网络下浏览器走 IPv6 一切正常。
 fn sort_ipv6_first(addrs: &mut [SocketAddr]) {
     addrs.sort_unstable_by_key(|addr| (addr.is_ipv4(), *addr));
+}
+
+/// 严格模式下把系统解析结果收敛成可固定给连接器的地址。
+///
+/// TUN 代理的 fake-IP 会把 AAAA 也合成 ULA 假地址（sing-box `fc00::/18`、
+/// Clash/Stash `fdfe:dcba:9876::/48`、Surge `fd00:6152::/32`）。这些地址不可直达，
+/// 但整组拒绝会让请求在发出前失败。丢掉不可放行的地址、保留 fake-IP IPv4，
+/// 连接器拿到的列表仍然不含私网。
+fn pinable_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, String> {
+    if addrs.is_empty() {
+        return Err("目标没有可用的 DNS 地址".into());
+    }
+    let kept: Vec<SocketAddr> = addrs
+        .into_iter()
+        .filter(|addr| allowed_ip(addr.ip()))
+        .collect();
+    if kept.is_empty() {
+        return Err(denied_target());
+    }
+    Ok(kept)
 }
 
 pub async fn resolve_target(url: &Url, strict: bool) -> Result<Vec<SocketAddr>, String> {
@@ -207,7 +232,11 @@ pub async fn resolve_target(url: &Url, strict: bool) -> Result<Vec<SocketAddr>, 
     };
     sort_ipv6_first(&mut addrs);
     addrs.dedup();
-    check_addresses_with_mode(&addrs, strict)?;
+    if strict {
+        addrs = pinable_addresses(addrs)?;
+    } else {
+        check_addresses_with_mode(&addrs, false)?;
+    }
     Ok(addrs)
 }
 
@@ -283,6 +312,23 @@ mod tests {
         ] {
             assert!(allowed_ip(ip.parse().unwrap()), "{ip}");
         }
+    }
+
+    #[test]
+    fn fakeip_mixed_answers_keep_only_the_pinnable_addresses() {
+        let addrs: Vec<SocketAddr> = ["198.18.0.7:443", "[fdfe:dcba:9876::7]:443", "1.1.1.1:443"]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert_eq!(
+            pinable_addresses(addrs).unwrap(),
+            vec![
+                "198.18.0.7:443".parse::<SocketAddr>().unwrap(),
+                "1.1.1.1:443".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        assert!(pinable_addresses(vec!["[fc00::7]:443".parse().unwrap()]).is_err());
+        assert!(pinable_addresses(Vec::new()).is_err());
     }
 
     #[test]

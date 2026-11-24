@@ -1,0 +1,81 @@
+name: Sync Test Branch
+run-name: "Sync Test Branch · ${{ github.event_name == 'pull_request_target' && format('PR #{0} ({1})', github.event.pull_request.number, github.event.action) || github.event_name }}"
+
+# 轻量同步工作流（约 15 秒）：
+# - 处理 `test` 标签继承/撤销，跳过 Draft 草稿与纯文档/工作流 PR；
+# - 从最新 `main` 按 PR 编号合并无冲突的可信 PR 到 `test` 分支；
+# - 故意与 6 平台打包解耦且不取消并发，确保任何 PR 状态页都不会因打包互杀而变灰/爆红。
+# 实际 6 平台打包与 `test-pre` 预发布由 .github/workflows/test-preview.yml 通过 workflow_run 承接。
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+      - labeled
+      - unlabeled
+      - ready_for_review
+      - converted_to_draft
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-test-branch
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+
+jobs:
+  sync-test:
+    name: Sync test branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: 合并可信测试 PR 至 test 分支
+        id: sync
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_NOTES_PATH: test-sync-bundle/test-release-notes.md
+        run: |
+          mkdir -p test-sync-bundle
+          node scripts/sync-test-branch.mjs
+      - name: 写入同步元数据供 Test Preview 消费
+        env:
+          SHOULD_BUILD: ${{ steps.sync.outputs.should_build }}
+          COMMIT_SHA: ${{ steps.sync.outputs.commit_sha }}
+          SHORT_SHA: ${{ steps.sync.outputs.short_sha }}
+        run: |
+          mkdir -p test-sync-bundle
+          node -e '
+            const fs = require("node:fs");
+            const meta = {
+              should_build: process.env.SHOULD_BUILD === "true",
+              commit_sha: process.env.COMMIT_SHA || "",
+              short_sha: process.env.SHORT_SHA || "",
+            };
+            fs.writeFileSync("test-sync-bundle/meta.json", JSON.stringify(meta, null, 2));
+            console.log(JSON.stringify(meta));
+          '
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-sync-bundle
+          path: test-sync-bundle/
+          retention-days: 3
+          if-no-files-found: error

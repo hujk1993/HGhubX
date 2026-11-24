@@ -1,0 +1,22 @@
+name: Setup iOS Project
+description: Run tauri ios init and patch Info.plist for portrait/landscape orientations and ATS.
+
+runs:
+  using: composite
+  steps:
+    - name: 生成 iOS 工程（带横竖屏 + ATS）
+      shell: bash
+      run: |
+        pnpm tauri ios init --ci
+        for plist in $(find src-tauri/gen/apple -name "Info.plist" 2>/dev/null); do
+          for key in "UISupportedInterfaceOrientations" "UISupportedInterfaceOrientations~iphone" "UISupportedInterfaceOrientations~ipad"; do
+            /usr/libexec/PlistBuddy -c "Delete :${key}" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :${key} array" "$plist"
+            /usr/libexec/PlistBuddy -c "Add :${key}:0 string UIInterfaceOrientationPortrait" "$plist"
+            /usr/libexec/PlistBuddy -c "Add :${key}:1 string UIInterfaceOrientationLandscapeLeft" "$plist"
+            /usr/libexec/PlistBuddy -c "Add :${key}:2 string UIInterfaceOrientationLandscapeRight" "$plist"
+          done
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$plist"
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$plist"
+        done

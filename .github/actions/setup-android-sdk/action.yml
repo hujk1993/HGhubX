@@ -1,0 +1,21 @@
+name: Setup Android SDK and NDK
+description: Configure Java 17, Android SDK 36, Build-Tools 36.0.0, and NDK 28.2.13676358.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: "17"
+    - name: 准备 Android SDK / NDK
+      shell: bash
+      run: |
+        SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+        echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+        echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+        SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+        "$SDKM" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+        echo "NDK_HOME=$SDK/ndk/28.2.13676358" >> "$GITHUB_ENV"
+        ls "$SDK/ndk"
